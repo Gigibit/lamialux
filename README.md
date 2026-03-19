@@ -32,3 +32,13 @@ Open http://127.0.0.1:8000
 ruff check .
 python manage.py test
 ```
+
+## Narrative modes
+- `THIRDY_PARTS_STORYTEL`: preserves the original Storytel-to-Daydream streaming behavior.
+- `WEB_RESEARCH_TTS`: searches for a PDF on the web, extracts chapter chunks, stores them into a local SQLite database, and prepares synchronized browser TTS + Daydream prompt playback.
+
+Set the mode in `.env`:
+
+```bash
+NARRATIVE_MODE_PROVIDER=THIRDY_PARTS_STORYTEL
+```
