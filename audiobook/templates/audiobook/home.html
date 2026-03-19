@@ -10,60 +10,194 @@
   <body>
     <main class="container">
       <header class="hero glass">
-        <p class="badge">Stable Diffusion · Audiobook · Daydream Canvas</p>
-        <h1>LamiaLux</h1>
-        <p class="subtitle">Request a book and transform its audio stream into an AI-generated video canvas.</p>
+        <div>
+          <p class="badge">Narrative mode · Daydream canvas · modern AI reading room</p>
+          <h1>LamiaLux</h1>
+          <p class="subtitle">
+            Switch behavior with <code>NARRATIVE_MODE_PROVIDER</code>: keep Storytel streaming as-is or enable
+            WEB_RESEARCH_TTS for PDF discovery, chapter chunking, local SQLite caching, and synchronized Daydream prompts.
+          </p>
+        </div>
+        <aside class="mode-card">
+          <span class="mode-label">Active mode</span>
+          <strong>{{ narrative_mode }}</strong>
+          <p>
+            {% if narrative_mode == 'WEB_RESEARCH_TTS' %}
+              Searches the web for a PDF, chunks chapter content, stores it locally, and prepares synchronized narration.
+            {% else %}
+              Uses the existing Storytel request flow without changing the original playback behavior.
+            {% endif %}
+          </p>
+        </aside>
       </header>
 
       <section class="panel glass">
-        <h2>1) Ask for a book</h2>
-        <form method="post" class="stack">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">1 · Input</p>
+            <h2>Build a narrative session</h2>
+          </div>
+          <p class="hint">The same form adapts automatically to the configured provider.</p>
+        </div>
+        <form method="post" class="stack request-form">
           {% csrf_token %}
           <input type="hidden" name="action" value="start" />
           <label>
-            {{ book_form.book_query.label }}
+            <span>{{ book_form.book_query.label }}</span>
             {{ book_form.book_query }}
           </label>
           <label>
-            {{ book_form.daydream_prompt.label }}
+            <span>{{ book_form.daydream_prompt.label }}</span>
             {{ book_form.daydream_prompt }}
+            <small>{{ book_form.daydream_prompt.help_text }}</small>
           </label>
-          <button type="submit">Start audiovisual generation</button>
+          <button type="submit">Launch narrative canvas</button>
         </form>
       </section>
 
-      {% if message %}<p class="message">{{ message }}</p>{% endif %}
-      {% if error %}<p class="error">{{ error }}</p>{% endif %}
+      {% if message %}<p class="message glass">{{ message }}</p>{% endif %}
+      {% if error %}<p class="error glass">{{ error }}</p>{% endif %}
 
       {% if stream %}
         <section class="panel glass stream-panel">
-          <h2>2) Daydream output</h2>
-          <div class="meta">
-            {% if stream.cover_url %}<img src="{{ stream.cover_url }}" alt="Cover" />{% endif %}
+          <div class="section-heading">
             <div>
-              <p><strong>{{ stream.title }}</strong></p>
-              <p>{{ stream.author }}</p>
-              <p class="small">Session: {{ stream.session_id }}</p>
+              <p class="eyebrow">2 · Playback</p>
+              <h2>Daydream output</h2>
+            </div>
+            <p class="hint">Session {{ stream.session_id }}</p>
+          </div>
+
+          <div class="stream-layout">
+            <div class="player-column">
+              <div class="meta">
+                {% if stream.cover_url %}<img src="{{ stream.cover_url }}" alt="Cover" />{% endif %}
+                <div>
+                  <p><strong>{{ stream.title }}</strong></p>
+                  <p>{{ stream.author }}</p>
+                  <p class="small">Mode: {{ stream.mode }}</p>
+                  {% if stream.pdf_url %}
+                    <p class="small"><a href="{{ stream.pdf_url }}" target="_blank" rel="noreferrer">Open sourced PDF</a></p>
+                  {% endif %}
+                </div>
+              </div>
+              <video controls autoplay src="{{ stream.video_url }}"></video>
+
+              {% if stream.mode == 'WEB_RESEARCH_TTS' and stream.chunks %}
+                <div class="glass narrative-console">
+                  <div>
+                    <p class="eyebrow">Narrative console</p>
+                    <h3>Speak chapters while Daydream shifts context</h3>
+                    <p class="small">The browser TTS reads each chunk and automatically fills the prompt box for synchronized updates.</p>
+                  </div>
+                  <div class="console-actions">
+                    <button type="button" id="play-tts">Play synced narration</button>
+                    <button type="button" id="stop-tts" class="secondary">Stop</button>
+                  </div>
+                </div>
+              {% endif %}
+            </div>
+
+            <div class="sidebar-column">
+              {% if stream.summary %}
+                <article class="glass insight-card">
+                  <p class="eyebrow">PDF digest</p>
+                  <p>{{ stream.summary }}</p>
+                  <p class="small">Stored in {{ stream.storage_path }}</p>
+                </article>
+              {% endif %}
+
+              <form method="post" class="stack prompt-update glass">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="update_prompt" />
+                <input type="hidden" name="session_id" value="{{ stream.session_id }}" />
+                <input type="hidden" name="video_url" value="{{ stream.video_url }}" />
+                <input type="hidden" name="title" value="{{ stream.title }}" />
+                <input type="hidden" name="author" value="{{ stream.author }}" />
+                <input type="hidden" name="cover_url" value="{{ stream.cover_url }}" />
+                <input type="hidden" name="mode" value="{{ stream.mode }}" />
+                <input type="hidden" name="summary" value="{{ stream.summary }}" />
+                <input type="hidden" name="pdf_url" value="{{ stream.pdf_url }}" />
+                <input type="hidden" name="storage_path" value="{{ stream.storage_path }}" />
+                <label>
+                  Update Daydream prompt (optional)
+                  <input id="prompt-input" name="daydream_prompt" type="text" placeholder="go with the flow" value="{{ stream.prompt }}" />
+                </label>
+                <button type="submit">Update prompt</button>
+              </form>
+
+              {% if stream.chunks %}
+                <section class="glass chunk-list">
+                  <div class="section-heading compact">
+                    <div>
+                      <p class="eyebrow">Chunk queue</p>
+                      <h3>{{ stream.chunks|length }} synchronized prompts</h3>
+                    </div>
+                  </div>
+                  <ol>
+                    {% for chunk in stream.chunks %}
+                      <li data-prompt="{{ chunk.prompt|escape }}" data-text="{{ chunk.text|escape }}">
+                        <strong>{{ chunk.chapter_title }} · {{ chunk.chunk_index }}</strong>
+                        <p>{{ chunk.text|truncatechars:220 }}</p>
+                      </li>
+                    {% endfor %}
+                  </ol>
+                </section>
+              {% endif %}
             </div>
           </div>
-          <video controls autoplay src="{{ stream.video_url }}"></video>
-
-          <form method="post" class="stack prompt-update">
-            {% csrf_token %}
-            <input type="hidden" name="action" value="update_prompt" />
-            <input type="hidden" name="session_id" value="{{ stream.session_id }}" />
-            <input type="hidden" name="video_url" value="{{ stream.video_url }}" />
-            <input type="hidden" name="title" value="{{ stream.title }}" />
-            <input type="hidden" name="author" value="{{ stream.author }}" />
-            <input type="hidden" name="cover_url" value="{{ stream.cover_url }}" />
-            <label>
-              Update Daydream prompt (optional)
-              <input name="daydream_prompt" type="text" placeholder="go with the flow" />
-            </label>
-            <button type="submit">Update prompt</button>
-          </form>
         </section>
       {% endif %}
     </main>
+
+    <script>
+      (() => {
+        const playButton = document.getElementById('play-tts');
+        const stopButton = document.getElementById('stop-tts');
+        const promptInput = document.getElementById('prompt-input');
+        const items = Array.from(document.querySelectorAll('.chunk-list li'));
+
+        if (!playButton || !stopButton || !promptInput || !('speechSynthesis' in window) || !items.length) {
+          return;
+        }
+
+        let currentIndex = 0;
+        let cancelled = false;
+
+        const speakChunk = () => {
+          if (cancelled || currentIndex >= items.length) {
+            return;
+          }
+
+          const item = items[currentIndex];
+          const text = item.dataset.text || '';
+          const prompt = item.dataset.prompt || '';
+          promptInput.value = prompt;
+          items.forEach((entry) => entry.classList.remove('active'));
+          item.classList.add('active');
+
+          const utterance = new SpeechSynthesisUtterance(text);
+          utterance.rate = 0.95;
+          utterance.onend = () => {
+            currentIndex += 1;
+            speakChunk();
+          };
+          window.speechSynthesis.speak(utterance);
+        };
+
+        playButton.addEventListener('click', () => {
+          cancelled = false;
+          currentIndex = 0;
+          window.speechSynthesis.cancel();
+          speakChunk();
+        });
+
+        stopButton.addEventListener('click', () => {
+          cancelled = true;
+          window.speechSynthesis.cancel();
+          items.forEach((entry) => entry.classList.remove('active'));
+        });
+      })();
+    </script>
   </body>
 </html>
