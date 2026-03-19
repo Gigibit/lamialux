@@ -152,6 +152,47 @@ class WebResearchSearchTests(TestCase):
                 "https://example.com/dune.pdf?download=1",
             )
 
+    def test_search_pdf_resolves_duckduckgo_redirect_to_https_pdf(self) -> None:
+        client = WebResearchNarrativeClient()
+
+        class DummyResponse:
+            text = (
+                '<a rel="nofollow" class="result__a" '
+                'href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fbooks%2Fwuthering-heights.pdf&amp;rut=abc">'
+                "PDF</a>"
+            )
+
+            def raise_for_status(self) -> None:
+                return None
+
+        class DummyClient:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+            def get(self, *args, **kwargs):
+                return DummyResponse()
+
+        with patch("audiobook.services.httpx.Client", DummyClient):
+            self.assertEqual(
+                client._search_pdf("cime tempestose"),
+                "https://example.com/books/wuthering-heights.pdf",
+            )
+
+    def test_normalize_pdf_url_rejects_non_pdf_target(self) -> None:
+        client = WebResearchNarrativeClient()
+
+        self.assertIsNone(
+            client._normalize_pdf_url(
+                "//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Farticle.html&amp;rut=abc"
+            )
+        )
+
 
 class HomeViewUnexpectedErrorTests(TestCase):
     def setUp(self) -> None:

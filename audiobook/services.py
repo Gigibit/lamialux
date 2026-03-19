@@ -5,7 +5,9 @@ import os
 import re
 import sqlite3
 from dataclasses import dataclass
+from html import unescape
 from pathlib import Path
+from urllib.parse import parse_qs, urljoin, urlparse
 
 import httpx
 from pypdf import PdfReader
@@ -181,21 +183,59 @@ class WebResearchNarrativeClient:
                 logger.error("Web PDF search connection error for query '%s': %s", query, exc)
                 raise UpstreamServiceError("Web research search is unavailable.") from exc
 
-        match = re.search(
-            r'nofollow" class="[^\"]*result__a[^\"]*" href="(?P<url>[^"]+pdf[^"]*)"',
-            response.text,
-        )
-        if not match:
-            match = re.search(
-                r'href="(?P<url>https?://[^\"]+\.pdf[^\"]*)"',
-                response.text,
-                re.IGNORECASE,
-            )
-        if not match:
-            logger.error("No PDF result found for query '%s'.", query)
-            raise UpstreamServiceError("No PDF found on the web for this request.")
+        for candidate in self._extract_pdf_candidates(response.text):
+            normalized_url = self._normalize_pdf_url(candidate)
+            if normalized_url:
+                logger.info("Selected PDF candidate for query '%s': %s", query, normalized_url)
+                return normalized_url
 
-        return str(httpx.URL(match.group("url")))
+        logger.error("No PDF result found for query '%s'.", query)
+        raise UpstreamServiceError("No PDF found on the web for this request.")
+
+    def _extract_pdf_candidates(self, html: str) -> list[str]:
+        patterns = [
+            re.compile(
+                r'nofollow" class="[^\"]*result__a[^\"]*" href="(?P<url>[^"]+)"',
+                re.IGNORECASE,
+            ),
+            re.compile(r'href="(?P<url>[^"]+\.pdf[^"]*)"', re.IGNORECASE),
+        ]
+        candidates: list[str] = []
+        seen: set[str] = set()
+        for pattern in patterns:
+            for match in pattern.finditer(html):
+                candidate = unescape(match.group("url")).strip()
+                if candidate and candidate not in seen:
+                    candidates.append(candidate)
+                    seen.add(candidate)
+        return candidates
+
+    def _normalize_pdf_url(self, candidate_url: str) -> str | None:
+        parsed = urlparse(candidate_url)
+        if parsed.scheme in {"http", "https"}:
+            return candidate_url if ".pdf" in candidate_url.lower() else None
+        if candidate_url.startswith("//duckduckgo.com/"):
+            query_params = parse_qs(parsed.query)
+            for key in ("uddg", "url", "target"):
+                for value in query_params.get(key, []):
+                    normalized_value = unescape(value).strip()
+                    if (
+                        normalized_value.lower().startswith(("http://", "https://"))
+                        and ".pdf" in normalized_value.lower()
+                    ):
+                        return normalized_value
+            logger.error("Discarding DuckDuckGo redirect without a PDF target: %s", candidate_url)
+            return None
+        if candidate_url.startswith("//"):
+            normalized_url = f"https:{candidate_url}"
+            return normalized_url if ".pdf" in normalized_url.lower() else None
+        if parsed.netloc and not parsed.scheme:
+            normalized_url = f"https://{candidate_url}"
+            return normalized_url if ".pdf" in normalized_url.lower() else None
+        if candidate_url.lower().endswith(".pdf") and self.search_url:
+            return urljoin(self.search_url, candidate_url)
+        logger.error("Discarding non-PDF or unsupported search candidate URL: %s", candidate_url)
+        return None
 
     def _download_pdf(self, pdf_url: str) -> bytes:
         with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
