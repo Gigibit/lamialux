@@ -121,3 +121,61 @@ class WebResearchNarrativeClientTests(TestCase):
         )
 
         self.assertTrue(sqlite_path.exists())
+
+
+class WebResearchSearchTests(TestCase):
+    def test_search_pdf_returns_url_without_human_repr(self) -> None:
+        client = WebResearchNarrativeClient()
+
+        class DummyResponse:
+            text = '<a rel="nofollow" class="result__a" href="https://example.com/dune.pdf?download=1">PDF</a>'
+
+            def raise_for_status(self) -> None:
+                return None
+
+        class DummyClient:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+            def get(self, *args, **kwargs):
+                return DummyResponse()
+
+        with patch("audiobook.services.httpx.Client", DummyClient):
+            self.assertEqual(
+                client._search_pdf("Dune"),
+                "https://example.com/dune.pdf?download=1",
+            )
+
+
+class HomeViewUnexpectedErrorTests(TestCase):
+    def setUp(self) -> None:
+        self.client = Client()
+
+    @patch(
+        "audiobook.views.WebResearchNarrativeClient.build_experience",
+        side_effect=RuntimeError("unexpected boom"),
+    )
+    @patch.dict("os.environ", {"NARRATIVE_MODE_PROVIDER": "WEB_RESEARCH_TTS"}, clear=False)
+    def test_unexpected_start_error_returns_500(self, _mock_build_experience) -> None:
+        with self.assertLogs("audiobook", level="ERROR") as logs:
+            response = self.client.post(
+                "/", {"action": "start", "book_query": "Dune", "daydream_prompt": ""}
+            )
+
+        self.assertEqual(response.status_code, 500)
+        self.assertContains(response, "An unexpected server error occurred.", status_code=500)
+        self.assertTrue(
+            any("Unhandled error while processing action 'start'" in msg for msg in logs.output)
+        )
+        self.assertTrue(
+            any(
+                "Returning non-2xx response for unhandled server error: status=500" in msg
+                for msg in logs.output
+            )
+        )
