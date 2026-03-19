@@ -28,24 +28,38 @@ def home(request: HttpRequest) -> HttpResponse:
 
     if request.method == "POST":
         action = request.POST.get("action", "start")
-        if action == "start":
-            context, status_code = _handle_start(request, context)
-            if status_code >= 400:
-                logger.error("Returning non-2xx response for start action: status=%s", status_code)
-            return render(request, "audiobook/home.html", context, status=status_code)
-        if action == "update_prompt":
-            context, status_code = _handle_prompt_update(request, context)
-            if status_code >= 400:
-                logger.error(
-                    "Returning non-2xx response for update_prompt action: status=%s",
-                    status_code,
-                )
-            return render(request, "audiobook/home.html", context, status=status_code)
+        try:
+            if action == "start":
+                context, status_code = _handle_start(request, context)
+                if status_code >= 400:
+                    logger.error(
+                        "Returning non-2xx response for start action: status=%s",
+                        status_code,
+                    )
+                return render(request, "audiobook/home.html", context, status=status_code)
+            if action == "update_prompt":
+                context, status_code = _handle_prompt_update(request, context)
+                if status_code >= 400:
+                    logger.error(
+                        "Returning non-2xx response for update_prompt action: status=%s",
+                        status_code,
+                    )
+                return render(request, "audiobook/home.html", context, status=status_code)
 
-        logger.error("Invalid action received: %s", action)
-        context["error"] = "Invalid action requested."
-        logger.error("Returning non-2xx response for invalid action: status=400")
-        return render(request, "audiobook/home.html", context, status=400)
+            logger.error("Invalid action received: %s", action)
+            context["error"] = "Invalid action requested."
+            logger.error("Returning non-2xx response for invalid action: status=400")
+            return render(request, "audiobook/home.html", context, status=400)
+        except Exception as exc:
+            logger.error(
+                "Unhandled error while processing action '%s': %s",
+                action,
+                exc,
+                exc_info=True,
+            )
+            context["error"] = "An unexpected server error occurred."
+            logger.error("Returning non-2xx response for unhandled server error: status=500")
+            return render(request, "audiobook/home.html", context, status=500)
 
     return render(request, "audiobook/home.html", context)
 

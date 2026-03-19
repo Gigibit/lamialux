@@ -160,7 +160,7 @@ class WebResearchNarrativeClient:
         )
 
     def _search_pdf(self, query: str) -> str:
-        search_query = f'{query} filetype:pdf'
+        search_query = f"{query} filetype:pdf"
         with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
             try:
                 response = client.get(
@@ -195,7 +195,7 @@ class WebResearchNarrativeClient:
             logger.error("No PDF result found for query '%s'.", query)
             raise UpstreamServiceError("No PDF found on the web for this request.")
 
-        return httpx.URL(match.group("url")).human_repr()
+        return str(httpx.URL(match.group("url")))
 
     def _download_pdf(self, pdf_url: str) -> bytes:
         with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
