@@ -403,6 +403,32 @@ class WebResearchNarrativeClientTests(TestCase):
 
         self.assertTrue(sqlite_path.exists())
 
+    def test_build_experience_uses_cached_chunks_without_refetching(self) -> None:
+        client = WebResearchNarrativeClient()
+        sqlite_path = Path("/tmp/lamialux-cache.sqlite3")
+        if sqlite_path.exists():
+            sqlite_path.unlink()
+        client.sqlite_path = sqlite_path
+
+        client._store_chunks(
+            query="dune",
+            pdf_url="http://example.com/dune.pdf",
+            chunks=[
+                NarrativeChunk(
+                    chapter_title="Chapter 1",
+                    chunk_index=1,
+                    text="Fear is the mind killer.",
+                )
+            ],
+        )
+
+        with patch.object(client, "_search_pdf", side_effect=AssertionError("cache miss")):
+            experience = client.build_experience("dune")
+
+        self.assertTrue(experience.cache_hit)
+        self.assertEqual(experience.pdf_url, "http://example.com/dune.pdf")
+        self.assertEqual(experience.chunks[0].text, "Fear is the mind killer.")
+
     def test_store_chunks_migrates_legacy_prompt_column(self) -> None:
         import sqlite3
 
