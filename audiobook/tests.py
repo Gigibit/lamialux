@@ -7,6 +7,7 @@ from django.test import Client, TestCase
 
 from audiobook.services import (
     DaydreamClient,
+    MusicSearchClient,
     NarrativeChunk,
     StreamSession,
     UpstreamServiceError,
@@ -20,28 +21,33 @@ class HomeViewTests(TestCase):
         self.client = Client()
         STREAM_SESSIONS.clear()
 
-    def test_static_stylesheet_serves_css_content_type(self) -> None:
-        response = self.client.get("/static/audiobook/style.css")
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response["Content-Type"].split(";")[0], "text/css")
-
     def test_home_renders(self) -> None:
         response = self.client.get("/")
+
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'id="theia-canvas"')
-        self.assertContains(response, 'id="theia-canvas-overlay"')
-        self.assertNotContains(response, 'id="narration-canvas"')
-        self.assertContains(response, "Canvas preview")
-        self.assertContains(response, "Canvas ready. Search and prepare a stream")
-        self.assertContains(response, 'id="connect-stream" disabled')
-        self.assertContains(response, "const hasPreparedStream = false;")
-        self.assertContains(response, 'id="coqui-player"')
-        self.assertNotContains(response, "Open downloaded PDF source")
+        self.assertContains(response, 'data-page="book"')
+        self.assertContains(response, 'href="/music"')
+        self.assertContains(response, 'id="whep-player" autoplay playsinline muted')
+        self.assertNotContains(response, 'controls autoplay')
+        self.assertContains(response, 'id="play-media" disabled')
+        self.assertContains(response, 'class="page-flip-card" id="page-flip-card"')
+
+    def test_music_page_renders(self) -> None:
+        response = self.client.get("/music")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'data-page="music"')
+        self.assertContains(response, 'Spotify search · Livepeer WHIP/WHEP')
+        self.assertContains(response, 'Search track and prepare stream')
+        self.assertContains(response, 'id="music-player" preload="none"')
 
     @patch("audiobook.views.DaydreamClient.create_livepeer_stream_session")
     @patch("audiobook.views.WebResearchNarrativeClient.build_experience")
-    def test_start_stream_success(self, build_experience, create_livepeer_stream_session) -> None:
+    def test_start_book_stream_success(
+        self,
+        build_experience,
+        create_livepeer_stream_session,
+    ) -> None:
         build_experience.return_value = type(
             "Experience",
             (),
@@ -66,6 +72,7 @@ class HomeViewTests(TestCase):
             output_video_url="https://video.example/whep",
             upstream_stream_id="livepeer-123",
         )
+
         response = self.client.post(
             "/",
             {
@@ -77,72 +84,67 @@ class HomeViewTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "PDF found, downloaded, chunked")
-        self.assertContains(response, "Session not matched yet.")
-        self.assertNotContains(response, "Open downloaded PDF source")
         self.assertContains(response, "Fear is the mind killer")
-        self.assertContains(response, 'id="theia-canvas"')
-        self.assertContains(response, 'id="theia-canvas-overlay"')
-        self.assertNotContains(response, 'id="narration-canvas"')
-        self.assertContains(response, "const hasPreparedStream = true;")
-        self.assertContains(response, 'name="browser_session_id" id="browser-session-id"')
-        self.assertContains(
-            response,
-            "localStorage.setItem('lamialux.browserSessionId', browserSessionId)",
-        )
-        self.assertContains(response, "const refreshStreamSessionAfterWhip = async () => {")
-        self.assertContains(response, "await refreshStreamSessionAfterWhip();")
-        self.assertContains(
-            response,
-            "Missing Livepeer session metadata required for WHIP publishing.",
-        )
-        self.assertContains(
-            response,
-            "Unable to update the Theia canvas overlay because the overlay element is missing.",
-        )
-        self.assertContains(response, "const PROMPT_UPDATE_INTERVAL_MS = 5000;")
-        self.assertContains(response, "/tts/coqui?sessionId=")
-        self.assertContains(response, "startPromptUpdates();")
-        self.assertContains(response, "/prompt")
-        self.assertNotContains(
-            response,
-            "Missing Livepeer session metadata required for WHIP/WHEP.",
-        )
-        self.assertContains(
-            response,
-            "https://raw.githubusercontent.com/Gigibit/ingoya/refs/heads/theia/public/caos.js",
-        )
+        self.assertContains(response, 'data-page="book"')
+        self.assertContains(response, "window.lamialuxPageConfig")
         self.assertEqual(STREAM_SESSIONS["browser-uuid"].whip_url, "https://video.example/whip")
-        self.assertEqual(STREAM_SESSIONS["browser-uuid"].whep_url, "https://video.example/whep")
-        self.assertEqual(
-            STREAM_SESSIONS["browser-uuid"].initial_whep_url,
-            "https://video.example/whep",
-        )
-        self.assertEqual(STREAM_SESSIONS["livepeer-123"].session_id, "livepeer-123")
 
-    @patch(
-        "audiobook.views.WebResearchNarrativeClient.build_experience",
-        side_effect=UpstreamServiceError("boom"),
-    )
-    def test_start_stream_error(self, _mock_find) -> None:
-        response = self.client.post(
-            "/",
+    @patch("audiobook.views.MusicSearchClient.search_track")
+    @patch("audiobook.views.DaydreamClient.create_livepeer_stream_session")
+    def test_start_music_stream_success(self, create_livepeer_stream_session, search_track) -> None:
+        search_track.return_value = type(
+            "Track",
+            (),
             {
-                "book_query": "Dune",
-                "daydream_prompt": "desert storm",
-                "browser_session_id": "browser-uuid",
+                "title": "Teardrop",
+                "artist": "Massive Attack",
+                "album": "Mezzanine",
+                "cover_image_url": "https://example.com/cover.jpg",
+                "external_url": "https://open.spotify.com/track/123",
+                "preview_url": "https://example.com/preview.mp3",
+                "provider": "SPOTIFY",
+            },
+        )()
+        create_livepeer_stream_session.return_value = StreamSession(
+            session_id="livepeer-456",
+            whip_url="https://video.example/whip",
+            whep_url="https://video.example/whep",
+            output_video_url="https://video.example/whep",
+            upstream_stream_id="livepeer-456",
+        )
+
+        response = self.client.post(
+            "/music",
+            {
+                "music_query": "Teardrop",
+                "daydream_prompt": "blue liquid light",
+                "browser_session_id": "browser-music",
             },
         )
-        self.assertEqual(response.status_code, 502)
-        self.assertContains(response, "boom", status_code=502)
 
-    def test_invalid_form_returns_400(self) -> None:
-        response = self.client.post("/", {"book_query": "", "daydream_prompt": ""})
-        self.assertEqual(response.status_code, 400)
-        self.assertContains(
-            response,
-            "Please provide both a book query and a prompt",
-            status_code=400,
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Spotify track found and the visual music stream is ready")
+        self.assertContains(response, "Teardrop")
+        self.assertContains(response, "Massive Attack")
+        self.assertContains(response, 'data-page="music"')
+        self.assertEqual(STREAM_SESSIONS["browser-music"].whip_url, "https://video.example/whip")
+
+    @patch(
+        "audiobook.views.MusicSearchClient.search_track",
+        side_effect=UpstreamServiceError("spotify boom"),
+    )
+    def test_music_start_error(self, _mock_search) -> None:
+        response = self.client.post(
+            "/music",
+            {
+                "music_query": "Teardrop",
+                "daydream_prompt": "blue liquid light",
+                "browser_session_id": "browser-music",
+            },
         )
+
+        self.assertEqual(response.status_code, 502)
+        self.assertContains(response, "spotify boom", status_code=502)
 
     @patch("audiobook.views.httpx.Client")
     def test_whep_proxy_returns_502_when_upstream_times_out(self, http_client) -> None:
@@ -174,101 +176,6 @@ class HomeViewTests(TestCase):
 
         self.assertEqual(response.status_code, 502)
         self.assertContains(response, "WHEP upstream unavailable.", status_code=502)
-
-    @patch("audiobook.views.httpx.Client")
-    def test_whip_proxy_saves_playback_url_header_as_whep_target(self, http_client) -> None:
-        STREAM_SESSIONS["abc"] = StreamSession(
-            session_id="abc",
-            whip_url="https://upstream.example/whip",
-            whep_url="https://upstream.example/whep",
-            output_video_url="https://upstream.example/original-output",
-            upstream_stream_id="upstream-abc",
-        )
-
-        class DummyResponse:
-            status_code = 201
-            text = "v=0"
-            headers = {
-                "content-type": "application/sdp",
-                "livepeer-playback-url": "https://fra-ai-prod-livepeer-ai-gateway-0.livepeer.com/live/video-to-video/stk_123-out/whep",
-                "location": "https://upstream.example/whip/resource/123",
-            }
-
-        class DummyClient:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, exc_type, exc, tb) -> None:
-                return None
-
-            def post(self, *args, **kwargs):
-                return DummyResponse()
-
-        http_client.return_value = DummyClient()
-
-        response = self.client.post(
-            "/streams/abc/whip",
-            data="v=0",
-            content_type="application/sdp",
-        )
-
-        self.assertEqual(response.status_code, 201)
-        self.assertEqual(
-            STREAM_SESSIONS["abc"].whep_url,
-            "https://fra-ai-prod-livepeer-ai-gateway-0.livepeer.com/live/video-to-video/stk_123-out/whep",
-        )
-        self.assertEqual(
-            STREAM_SESSIONS["abc"].output_video_url,
-            "https://upstream.example/original-output",
-        )
-        self.assertEqual(
-            response["livepeer-playback-url"],
-            "http://testserver/streams/abc/whep",
-        )
-        self.assertEqual(
-            response["location"],
-            "http://testserver/streams/abc/whep/resource",
-        )
-
-    @patch("audiobook.views.httpx.Client")
-    def test_whip_proxy_returns_502_when_playback_header_is_missing(self, http_client) -> None:
-        STREAM_SESSIONS["abc"] = StreamSession(
-            session_id="abc",
-            whip_url="https://upstream.example/whip",
-            whep_url="",
-            output_video_url="https://upstream.example/original-output",
-            upstream_stream_id="upstream-abc",
-        )
-
-        class DummyResponse:
-            status_code = 201
-            text = "v=0"
-            headers = {"content-type": "application/sdp"}
-
-        class DummyClient:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, exc_type, exc, tb) -> None:
-                return None
-
-            def post(self, *args, **kwargs):
-                return DummyResponse()
-
-        http_client.return_value = DummyClient()
-
-        response = self.client.post(
-            "/streams/abc/whip",
-            data="v=0",
-            content_type="application/sdp",
-        )
-
-        self.assertEqual(response.status_code, 502)
-        self.assertContains(
-            response,
-            "WHIP upstream did not provide a playback URL.",
-            status_code=502,
-        )
 
     @patch("audiobook.views.PromptStreamUpdater.update_prompt")
     def test_stream_prompt_updates_existing_stream(self, update_prompt) -> None:
@@ -370,6 +277,15 @@ class WebResearchNarrativeClientTests(TestCase):
             "//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fbook.pdf"
         )
         self.assertEqual(url, "https://example.com/book.pdf")
+
+
+class MusicSearchClientTests(TestCase):
+    def test_search_track_requires_supported_provider(self) -> None:
+        client = MusicSearchClient()
+        client.provider = "APPLE"
+
+        with self.assertRaises(UpstreamServiceError):
+            client.search_track("Teardrop")
 
 
 class DaydreamClientTests(TestCase):

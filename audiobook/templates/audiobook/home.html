@@ -3,38 +3,83 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>LamiaLux · PDF Reader Stream</title>
+    <title>LamiaLux · {% if page == 'music' %}Visual Music{% else %}PDF Reader Stream{% endif %}</title>
     {% load static %}
     <link rel="stylesheet" href="{% static 'audiobook/style.css' %}" />
   </head>
-  <body>
+  <body data-page="{{ page }}">
     <main class="container">
-      <section class="hero panel">
+      <nav class="top-nav panel">
         <div>
-          <p class="eyebrow">PDF search · Coqui TTS · Livepeer WHIP/WHEP</p>
-          <h1>LamiaLux</h1>
-          <p class="subtitle">
-            Search for a book PDF, download it, read it with Coqui text-to-speech,
-            stream the generated narration, and publish the same narration session into
-            Livepeer WHIP while monitoring the WHEP output video.
-          </p>
+          <p class="eyebrow">LamiaLux</p>
+          <h1>Streamed visual narratives</h1>
         </div>
-      </section>
+        <div class="nav-actions">
+          <a href="/" class="nav-icon-button {% if page == 'book' %}active{% endif %}" data-nav-target="book" aria-label="Book section">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H7a3 3 0 0 0-3 3V5.5Zm3 12.5h11V5H6.5A1.5 1.5 0 0 0 5 6.5V19a4.98 4.98 0 0 1 2-.5Z"/></svg>
+          </a>
+          <a href="/music" class="nav-icon-button {% if page == 'music' %}active{% endif %}" data-nav-target="music" aria-label="Music section">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 3v12.55A4 4 0 1 0 18 19V7h4V3h-6Z"/></svg>
+          </a>
+        </div>
+      </nav>
 
-      <section class="panel">
-        <form method="post" class="request-form">
-          {% csrf_token %}
-          <input type="hidden" name="browser_session_id" id="browser-session-id" />
-          <label>
-            <span>{{ book_form.book_query.label }}</span>
-            {{ book_form.book_query }}
-          </label>
-          <label>
-            <span>{{ book_form.daydream_prompt.label }}</span>
-            {{ book_form.daydream_prompt }}
-          </label>
-          <button type="submit">Search, download, and prepare stream</button>
-        </form>
+      <section class="page-flip-shell">
+        <div class="page-flip-card" id="page-flip-card">
+          <section class="hero panel page-face {% if page == 'music' %}music-face{% else %}book-face{% endif %}">
+            {% if page == 'music' %}
+              <div>
+                <p class="eyebrow">Spotify search · Livepeer WHIP/WHEP</p>
+                <h2>Visual music</h2>
+                <p class="subtitle">
+                  Search a music title on the configured <strong>MUSIC_MODE_PROVIDER</strong>, currently Spotify,
+                  then play the track while the same browser session streams the reactive visual canvas into WHIP.
+                </p>
+              </div>
+            {% else %}
+              <div>
+                <p class="eyebrow">PDF search · Coqui TTS · Livepeer WHIP/WHEP</p>
+                <h2>Visual books</h2>
+                <p class="subtitle">
+                  Search for a book PDF, download it, read it with Coqui text-to-speech,
+                  and publish the generated narration together with the reactive canvas into Livepeer.
+                </p>
+              </div>
+            {% endif %}
+          </section>
+
+          <section class="panel">
+            {% if page == 'music' %}
+              <form method="post" class="request-form" data-mode="music">
+                {% csrf_token %}
+                <input type="hidden" name="browser_session_id" id="browser-session-id" />
+                <label>
+                  <span>{{ music_form.music_query.label }}</span>
+                  {{ music_form.music_query }}
+                </label>
+                <label>
+                  <span>{{ music_form.daydream_prompt.label }}</span>
+                  {{ music_form.daydream_prompt }}
+                </label>
+                <button type="submit">Search track and prepare stream</button>
+              </form>
+            {% else %}
+              <form method="post" class="request-form" data-mode="book">
+                {% csrf_token %}
+                <input type="hidden" name="browser_session_id" id="browser-session-id" />
+                <label>
+                  <span>{{ book_form.book_query.label }}</span>
+                  {{ book_form.book_query }}
+                </label>
+                <label>
+                  <span>{{ book_form.daydream_prompt.label }}</span>
+                  {{ book_form.daydream_prompt }}
+                </label>
+                <button type="submit">Search, download, and prepare stream</button>
+              </form>
+            {% endif %}
+          </section>
+        </div>
       </section>
 
       {% if message %}<p class="message">{{ message }}</p>{% endif %}
@@ -45,14 +90,31 @@
           <div class="section-heading">
             <div>
               <p class="eyebrow">Live output</p>
-              <h2>{% if stream %}{{ stream.title }}{% else %}Canvas preview{% endif %}</h2>
+              <h2>{% if stream %}{{ stream.title }}{% else %}{% if page == 'music' %}Visual music preview{% else %}Canvas preview{% endif %}{% endif %}</h2>
             </div>
-            <p class="small" id="stream-session-label">{% if stream %}Session not matched yet.{% else %}Search a PDF to bind this canvas to a stream session.{% endif %}</p>
+            <p class="small" id="stream-session-label">{% if stream %}Session not matched yet.{% else %}{% if page == 'music' %}Search a track to bind this canvas to a stream session.{% else %}Search a PDF to bind this canvas to a stream session.{% endif %}{% endif %}</p>
           </div>
           <p class="small">{% if stream %}{{ stream.author }}{% else %}The visible canvas is always mounted so the animation surface is available before streaming starts.{% endif %}</p>
-          <video id="whep-player" controls autoplay playsinline muted></video>
+          <video id="whep-player" autoplay playsinline muted></video>
           <audio id="coqui-player" preload="none" hidden></audio>
+          <audio id="music-player" preload="none" {% if page != 'music' %}hidden{% endif %}></audio>
           <div class="visualizer-stack">
+            {% if page == 'music' %}
+              <div class="music-meta panel-subsection {% if not music_track %}empty-state{% endif %}" id="music-meta">
+                {% if music_track %}
+                  {% if music_track.cover_image_url %}<img src="{{ music_track.cover_image_url }}" alt="{{ music_track.title }} cover" class="cover-art" />{% endif %}
+                  <div>
+                    <p class="eyebrow">{{ music_track.provider }}</p>
+                    <h3>{{ music_track.title }}</h3>
+                    <p class="small">{{ music_track.artist }}{% if music_track.album %} · {{ music_track.album }}{% endif %}</p>
+                    {% if music_track.external_url %}<a href="{{ music_track.external_url }}" target="_blank" rel="noreferrer">Open on Spotify</a>{% endif %}
+                    {% if not music_track.preview_url %}<p class="small note">Spotify did not expose a preview URL for this track, so browser playback may require opening it on Spotify.</p>{% endif %}
+                  </div>
+                {% else %}
+                  <p class="small">Search a song title to load Spotify metadata and optional preview playback.</p>
+                {% endif %}
+              </div>
+            {% endif %}
             <div>
               <p class="eyebrow">Caos canvas</p>
               <div class="canvas-shell">
@@ -63,620 +125,60 @@
           </div>
           <div class="console-actions">
             <button type="button" id="connect-stream" {% if not stream %}disabled{% endif %}>Connect WHIP/WHEP</button>
-            <button type="button" id="play-tts" {% if not stream %}disabled{% endif %}>Read book</button>
-            <button type="button" id="stop-tts" class="secondary">Stop</button>
+            {% if page == 'music' %}
+              <button type="button" id="play-media" {% if not music_track %}disabled{% endif %}>Play track</button>
+            {% else %}
+              <button type="button" id="play-media" {% if not stream %}disabled{% endif %}>Read book</button>
+            {% endif %}
+            <button type="button" id="stop-media" class="secondary">Stop</button>
           </div>
-          <p id="stream-status" class="small">{% if stream %}Idle.{% else %}Canvas ready. Search and prepare a stream to enable WHIP/WHEP and TTS controls.{% endif %}</p>
-          <p class="small note">
-            Coqui TTS audio is generated on the server and played through the browser audio graph so the
-            narration can be heard locally and embedded into the published WHIP stream.
-          </p>
+          <p id="stream-status" class="small">{% if stream %}Idle.{% else %}{% if page == 'music' %}Canvas ready. Search and prepare a song to enable WHIP/WHEP and playback controls.{% else %}Canvas ready. Search and prepare a stream to enable WHIP/WHEP and TTS controls.{% endif %}{% endif %}</p>
+          <p class="small note">{% if page == 'music' %}When a Spotify preview URL is available, the browser audio graph mixes it into the WHIP input stream together with the canvas video.{% else %}Coqui TTS audio is generated on the server and played through the browser audio graph so the narration can be heard locally and embedded into the published WHIP stream.{% endif %}</p>
         </article>
 
         <aside class="panel chunk-list">
-          <p class="eyebrow">Book chunks</p>
-          {% if stream %}
-            <p class="small">Stored in {{ stream.storage_path }}</p>
-            <ol>
-              {% for chunk in stream.chunks %}
-                <li data-text="{{ chunk.text|escape }}">
-                  <strong>{{ chunk.chapter_title }} · {{ chunk.chunk_index }}</strong>
-                  <p>{{ chunk.text|truncatechars:240 }}</p>
-                </li>
-              {% endfor %}
-            </ol>
+          {% if page == 'music' %}
+            <p class="eyebrow">Track session</p>
+            {% if music_track %}
+              <ul class="track-facts">
+                <li><strong>Provider:</strong> {{ music_track.provider }}</li>
+                <li><strong>Title:</strong> {{ music_track.title }}</li>
+                <li><strong>Artist:</strong> {{ music_track.artist }}</li>
+                <li><strong>Album:</strong> {{ music_track.album|default:'—' }}</li>
+                <li><strong>Preview URL:</strong> {% if music_track.preview_url %}available{% else %}not available{% endif %}</li>
+              </ul>
+            {% else %}
+              <p class="small">No track prepared yet. Submit a title to load Spotify metadata and prepare the visual music session.</p>
+            {% endif %}
           {% else %}
-            <p class="small">No PDF prepared yet. Submit a query to load chunks for Coqui TTS and stream publishing.</p>
+            <p class="eyebrow">Book chunks</p>
+            {% if stream %}
+              <p class="small">Stored in {{ stream.storage_path }}</p>
+              <ol>
+                {% for chunk in stream.chunks %}
+                  <li data-text="{{ chunk.text|escape }}">
+                    <strong>{{ chunk.chapter_title }} · {{ chunk.chunk_index }}</strong>
+                    <p>{{ chunk.text|truncatechars:240 }}</p>
+                  </li>
+                {% endfor %}
+              </ol>
+            {% else %}
+              <p class="small">No PDF prepared yet. Submit a query to load chunks for Coqui TTS and stream publishing.</p>
+            {% endif %}
           {% endif %}
         </aside>
       </section>
     </main>
+
     <script src="{% static 'audiobook/caos.js' %}"></script>
-
+    {{ music_track|json_script:"music-track-data" }}
     <script>
-      (() => {
-        const browserSessionInput = document.getElementById('browser-session-id');
-        const playButton = document.getElementById('play-tts');
-        const stopButton = document.getElementById('stop-tts');
-        const connectButton = document.getElementById('connect-stream');
-        const statusEl = document.getElementById('stream-status');
-        const animationCanvas = document.getElementById('theia-canvas');
-        const animationOverlay = document.getElementById('theia-canvas-overlay');
-        const video = document.getElementById('whep-player');
-        const coquiPlayer = document.getElementById('coqui-player');
-        const sessionLabel = document.getElementById('stream-session-label');
-        const items = Array.from(document.querySelectorAll('.chunk-list li'));
-        const hasPreparedStream = {{ stream|yesno:'true,false' }};
-        const PROMPT_UPDATE_INTERVAL_MS = 5000;
-
-        const createBrowserSessionId = () => ((window.crypto && typeof window.crypto.randomUUID === 'function')
-          ? window.crypto.randomUUID()
-          : `session-${Date.now()}-${Math.random().toString(16).slice(2)}`);
-        const storedBrowserSessionId = window.localStorage.getItem('lamialux.browserSessionId');
-        const browserSessionId = storedBrowserSessionId || createBrowserSessionId();
-        if (!storedBrowserSessionId) {
-          window.localStorage.setItem('lamialux.browserSessionId', browserSessionId);
-        }
-        if (browserSessionInput) {
-          browserSessionInput.value = browserSessionId;
-        }
-
-        if (!playButton || !stopButton || !connectButton || !statusEl || !animationCanvas || !animationOverlay || !video || !sessionLabel || !coquiPlayer) {
-          return;
-        }
-
-        const logger = window.logger && typeof window.logger.error === 'function' ? window.logger : console;
-
-        const streamSession = {
-          sessionId: browserSessionId,
-          whipUrl: '',
-          whepUrl: '',
-          outputVideoUrl: '',
-        };
-        const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
-        let publisherPc = null;
-        let viewerPc = null;
-        let whepResourceUrl = null;
-        let currentIndex = 0;
-        let cancelled = false;
-        let compositeStream = null;
-        let connectPromise = null;
-        let streamReady = false;
-        let audioContext = null;
-        let destination = null;
-        let gainNode = null;
-        let sourceNode = null;
-        let promptUpdateTimerId = null;
-        let playbackToken = 0;
-
-        const sentencePool = items
-          .flatMap((item) => (item.dataset.text || '').match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [])
-          .map((sentence) => sentence.trim())
-          .filter((sentence) => sentence.length > 20);
-
-        const setStatus = (message) => {
-          statusEl.textContent = message;
-        };
-
-        const drawCanvas = (text) => {
-          if (!animationOverlay) {
-            logger.error('Unable to update the Theia canvas overlay because the overlay element is missing.');
-            return;
-          }
-          animationOverlay.innerHTML = '';
-          const title = document.createElement('strong');
-          title.textContent = 'LamiaLux live PDF reading';
-          const body = document.createElement('span');
-          body.textContent = text;
-          animationOverlay.append(title, body);
-        };
-
-        const validateStreamSession = () => {
-          if (!streamSession.sessionId || !streamSession.whipUrl) {
-            const error = new Error('Missing Livepeer session metadata required for WHIP publishing.');
-            logger.error('Livepeer session metadata is incomplete:', {
-              browserSessionId,
-              normalizedStreamSession: streamSession,
-            });
-            throw error;
-          }
-        };
-
-        const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
-
-        const summarizeResponse = async (response) => {
-          const body = await response.text();
-          return {
-            status: response.status,
-            statusText: response.statusText,
-            url: response.url,
-            location: response.headers.get('location'),
-            livepeerPlaybackUrl: response.headers.get('livepeer-playback-url'),
-            bodyPreview: body.slice(0, 500),
-          };
-        };
-
-        const chooseRandomPromptSentence = () => {
-          if (!sentencePool.length) {
-            return '';
-          }
-          const randomIndex = Math.floor(Math.random() * sentencePool.length);
-          return sentencePool[randomIndex];
-        };
-
-        const stopPromptUpdates = () => {
-          if (promptUpdateTimerId) {
-            window.clearInterval(promptUpdateTimerId);
-            promptUpdateTimerId = null;
-          }
-        };
-
-        const pushPromptUpdate = async (prompt) => {
-          if (!prompt || !streamSession.sessionId) {
-            return;
-          }
-
-          try {
-            const response = await fetch(`/streams/${encodeURIComponent(streamSession.sessionId)}/prompt`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ prompt }),
-            });
-            if (!response.ok) {
-              const body = await response.text();
-              logger.error('Prompt stream update failed.', {
-                sessionId: streamSession.sessionId,
-                status: response.status,
-                prompt,
-                body,
-              });
-            }
-          } catch (error) {
-            logger.error('Prompt stream update raised an unexpected error.', {
-              sessionId: streamSession.sessionId,
-              prompt,
-              error,
-            });
-          }
-        };
-
-        const startPromptUpdates = () => {
-          stopPromptUpdates();
-          if (!sentencePool.length) {
-            logger.error('Prompt stream updates were requested without any readable sentences.', { sessionId: streamSession.sessionId });
-            return;
-          }
-
-          promptUpdateTimerId = window.setInterval(() => {
-            const prompt = chooseRandomPromptSentence();
-            if (prompt) {
-              pushPromptUpdate(prompt);
-            }
-          }, PROMPT_UPDATE_INTERVAL_MS);
-        };
-
-        const logPeerConnectionState = (label, peerConnection, extra = {}) => {
-          console.info(`${label} peer connection state changed.`, {
-            connectionState: peerConnection.connectionState,
-            iceConnectionState: peerConnection.iceConnectionState,
-            iceGatheringState: peerConnection.iceGatheringState,
-            signalingState: peerConnection.signalingState,
-            ...extra,
-          });
-        };
-
-        const handleViewerIceCandidate = async ({ candidate }) => {
-          if (!candidate || !whepResourceUrl) {
-            return;
-          }
-
-          const sdpFragment = `a=${candidate.candidate}\n`;
-          try {
-            await fetch(whepResourceUrl, {
-              method: 'PATCH',
-              headers: {
-                'Content-Type': 'application/trickle-ice-sdpfrag',
-              },
-              body: sdpFragment,
-            });
-          } catch (error) {
-            console.warn('Unable to PATCH WHEP ICE candidate to the proxy resource.', {
-              error,
-              sessionId: streamSession.sessionId,
-              whepResourceUrl,
-              candidate,
-            });
-          }
-        };
-
-        const ensureStreamMatch = async () => {
-          if (streamSession.whipUrl && streamSession.whepUrl) {
-            return streamSession;
-          }
-
-          const response = await fetch('/streams/match', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sessionId: streamSession.sessionId }),
-          });
-
-          if (!response.ok) {
-            const body = await response.text();
-            logger.error('Stream match request failed.', {
-              sessionId: streamSession.sessionId,
-              status: response.status,
-              body,
-            });
-            throw new Error('Unable to match an existing Livepeer stream session.');
-          }
-
-          const matchedStreamSession = await response.json();
-          streamSession.sessionId = matchedStreamSession.sessionId || streamSession.sessionId;
-          streamSession.whipUrl = matchedStreamSession.whipUrl || matchedStreamSession.whip_url || '';
-          streamSession.whepUrl = matchedStreamSession.whepUrl || matchedStreamSession.whep_url || '';
-          streamSession.outputVideoUrl = matchedStreamSession.outputVideoUrl || matchedStreamSession.output_video_url || '';
-          sessionLabel.textContent = `Session ${streamSession.sessionId}`;
-          connectButton.disabled = false;
-          playButton.disabled = false;
-          return streamSession;
-        };
-
-        const closePeerConnection = (peerConnection) => {
-          if (!peerConnection) {
-            return;
-          }
-          peerConnection.close();
-        };
-
-        const waitForIceGatheringComplete = (peerConnection) => new Promise((resolve) => {
-          if (peerConnection.iceGatheringState === 'complete') {
-            resolve();
-            return;
-          }
-
-          const onStateChange = () => {
-            if (peerConnection.iceGatheringState === 'complete') {
-              peerConnection.removeEventListener('icegatheringstatechange', onStateChange);
-              resolve();
-            }
-          };
-
-          peerConnection.addEventListener('icegatheringstatechange', onStateChange);
-        });
-
-        const ensureAudioGraph = async () => {
-          if (audioContext) {
-            if (audioContext.state === 'suspended') {
-              await audioContext.resume();
-            }
-            return;
-          }
-
-          audioContext = new AudioContext();
-          destination = audioContext.createMediaStreamDestination();
-          gainNode = audioContext.createGain();
-          gainNode.gain.value = 1;
-          sourceNode = audioContext.createMediaElementSource(coquiPlayer);
-          sourceNode.connect(gainNode);
-          gainNode.connect(destination);
-          gainNode.connect(audioContext.destination);
-          await audioContext.resume();
-        };
-
-        const ensureCompositeStream = async () => {
-          if (compositeStream) {
-            await ensureAudioGraph();
-            return compositeStream;
-          }
-
-          await ensureAudioGraph();
-          drawCanvas('Theia canvas capture ready for WHIP publishing.');
-          const canvasStream = animationCanvas.captureStream(30);
-          compositeStream = new MediaStream([
-            ...canvasStream.getVideoTracks(),
-            ...destination.stream.getAudioTracks(),
-          ]);
-          return compositeStream;
-        };
-
-        const hydrateStreamSession = async () => {
-          await ensureStreamMatch();
-          validateStreamSession();
-          return streamSession;
-        };
-
-        const refreshStreamSessionAfterWhip = async () => {
-          await ensureStreamMatch();
-          streamSession.whepUrl = streamSession.whepUrl || `${window.location.origin}/streams/${streamSession.sessionId}/whep`;
-          return streamSession;
-        };
-
-        const publishWhip = async () => {
-          await hydrateStreamSession();
-          const stream = await ensureCompositeStream();
-          if (publisherPc) {
-            closePeerConnection(publisherPc);
-          }
-          publisherPc = new RTCPeerConnection(rtcConfig);
-          publisherPc.onconnectionstatechange = () => {
-            logPeerConnectionState('WHIP publisher', publisherPc, { sessionId: streamSession.sessionId });
-            setStatus(`WHIP publishing connection: ${publisherPc.connectionState}.`);
-          };
-          publisherPc.oniceconnectionstatechange = () => {
-            logPeerConnectionState('WHIP publisher ICE', publisherPc, { sessionId: streamSession.sessionId });
-          };
-          stream.getTracks().forEach((track) => publisherPc.addTrack(track, stream));
-          const offer = await publisherPc.createOffer();
-          await publisherPc.setLocalDescription(offer);
-          await waitForIceGatheringComplete(publisherPc);
-          const whipUrl = streamSession.whipUrl || `${window.location.origin}/streams/${streamSession.sessionId}/whip`;
-          const response = await fetch(whipUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/sdp' },
-            body: publisherPc.localDescription.sdp,
-          });
-          if (!response.ok) {
-            const responseSummary = await summarizeResponse(response);
-            logger.error('WHIP publish request returned a non-2xx response.', {
-              sessionId: streamSession.sessionId,
-              whipUrl,
-              localDescriptionLength: publisherPc.localDescription?.sdp?.length || 0,
-              response: responseSummary,
-            });
-            throw new Error(`WHIP connection failed with status ${responseSummary.status}`);
-          }
-          const playbackHeader = response.headers.get('livepeer-playback-url');
-          if (playbackHeader) {
-            streamSession.whepUrl = playbackHeader
-              .replace('fra-ai-prod-livepeer-ai-gateway-0.livepeer.com', 'ai.livepeer.com');
-          }
-          await publisherPc.setRemoteDescription({ type: 'answer', sdp: await response.text() });
-          await refreshStreamSessionAfterWhip();
-        };
-
-        const createViewerPeerConnection = () => {
-          viewerPc = new RTCPeerConnection(rtcConfig);
-          viewerPc.addTransceiver('video', { direction: 'recvonly' });
-          viewerPc.addTransceiver('audio', { direction: 'recvonly' });
-          viewerPc.onicecandidate = handleViewerIceCandidate;
-          viewerPc.onconnectionstatechange = () => {
-            logPeerConnectionState('WHEP viewer', viewerPc, { sessionId: streamSession.sessionId, whepResourceUrl });
-          };
-          viewerPc.oniceconnectionstatechange = () => {
-            logPeerConnectionState('WHEP viewer ICE', viewerPc, { sessionId: streamSession.sessionId, whepResourceUrl });
-          };
-          viewerPc.ontrack = (event) => {
-            video.srcObject = event.streams[0];
-          };
-          return viewerPc;
-        };
-
-        const destroyViewerSession = async () => {
-          if (whepResourceUrl) {
-            try {
-              await fetch(whepResourceUrl, { method: 'DELETE' });
-            } catch (error) {
-              console.warn('Unable to DELETE WHEP resource during cleanup.', {
-                error,
-                whepResourceUrl,
-                sessionId: streamSession.sessionId,
-              });
-            }
-          }
-          whepResourceUrl = null;
-          if (viewerPc) {
-            viewerPc.close();
-            viewerPc = null;
-          }
-        };
-
-        const startWhepPlayback = async () => {
-          await refreshStreamSessionAfterWhip();
-          const initialPollIntervalMs = 5000;
-          const maxPollIntervalMs = 30000;
-          let attempt = 0;
-          let pollIntervalMs = initialPollIntervalMs;
-          let lastError;
-
-          while (pollIntervalMs <= maxPollIntervalMs) {
-            attempt += 1;
-            await destroyViewerSession();
-            const peerConnection = createViewerPeerConnection();
-            const offer = await peerConnection.createOffer();
-            await peerConnection.setLocalDescription(offer);
-            await waitForIceGatheringComplete(peerConnection);
-            const whepUrl = streamSession.whepUrl || `${window.location.origin}/streams/${streamSession.sessionId}/whep`;
-            const response = await fetch(whepUrl, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/sdp' },
-              body: peerConnection.localDescription.sdp,
-            });
-
-            if (response.ok) {
-              const resourceLocation = response.headers.get('location');
-              whepResourceUrl = resourceLocation ? new URL(resourceLocation, window.location.origin).toString() : null;
-              await peerConnection.setRemoteDescription({ type: 'answer', sdp: await response.text() });
-              await video.play().catch(() => {});
-              return;
-            }
-
-            const responseSummary = await summarizeResponse(response);
-            lastError = new Error(`WHEP connection failed with status ${responseSummary.status}`);
-            logger.error('WHEP playback request returned a non-2xx response; retrying with backoff.', {
-              attempt,
-              pollIntervalMs,
-              sessionId: streamSession.sessionId,
-              whepUrl,
-              localDescriptionLength: peerConnection.localDescription?.sdp?.length || 0,
-              response: responseSummary,
-            });
-            setStatus(`WHIP connected. Waiting for WHEP (attempt ${attempt}, retry in ${Math.round(pollIntervalMs / 1000)}s)...`);
-            await sleep(pollIntervalMs);
-            pollIntervalMs = Math.min(pollIntervalMs + 2000, maxPollIntervalMs + 2000);
-          }
-
-          logger.error('WHEP playback failed after exhausting the configured backoff retries.', {
-            attempts: attempt,
-            sessionId: streamSession.sessionId,
-            lastError,
-          });
-          throw lastError;
-        };
-
-        const connectStream = async () => {
-          if (connectPromise) {
-            return connectPromise;
-          }
-
-          connectPromise = (async () => {
-            try {
-              setStatus('Connecting WHIP/WHEP...');
-              drawCanvas('Preparing Theia canvas feed for WHIP...');
-              await publishWhip();
-              setStatus('Canvas feed published through WHIP. Waiting for WHEP playback...');
-              await startWhepPlayback();
-              streamReady = true;
-              setStatus('WHIP/WHEP connected.');
-            } catch (error) {
-              logger.error('Livepeer connection failed while publishing the canvas feed:', error);
-              setStatus(`Reading locally. Stream connection failed: ${error.message}`);
-              throw error;
-            } finally {
-              connectPromise = null;
-            }
-          })();
-
-          return connectPromise;
-        };
-
-        const fetchChunkAudioUrl = (index) => `/tts/coqui?sessionId=${encodeURIComponent(streamSession.sessionId)}&chunkIndex=${index}`;
-
-        const stopPlayback = () => {
-          cancelled = true;
-          playbackToken += 1;
-          stopPromptUpdates();
-          coquiPlayer.pause();
-          coquiPlayer.removeAttribute('src');
-          coquiPlayer.load();
-          items.forEach((item) => item.classList.remove('active'));
-          setStatus('Reading stopped.');
-        };
-
-        const playChunk = async (index, token) => {
-          if (cancelled || token !== playbackToken) {
-            return;
-          }
-          if (index >= items.length) {
-            stopPromptUpdates();
-            setStatus('Reading complete.');
-            return;
-          }
-
-          currentIndex = index;
-          items.forEach((item, itemIndex) => item.classList.toggle('active', itemIndex === index));
-          const text = items[index].dataset.text;
-          drawCanvas(text);
-          setStatus(`Reading chunk ${index + 1} of ${items.length} with Coqui TTS...`);
-
-          const audioUrl = fetchChunkAudioUrl(index + 1);
-          coquiPlayer.src = audioUrl;
-          coquiPlayer.currentTime = 0;
-
-          try {
-            await coquiPlayer.play();
-          } catch (error) {
-            logger.error('Coqui audio playback failed to start.', {
-              sessionId: streamSession.sessionId,
-              index,
-              audioUrl,
-              error,
-            });
-            setStatus('Coqui TTS playback failed to start.');
-            return;
-          }
-
-          await new Promise((resolve, reject) => {
-            const onEnded = () => {
-              cleanup();
-              resolve();
-            };
-            const onError = () => {
-              cleanup();
-              reject(new Error('The Coqui TTS audio element reported an error.'));
-            };
-            const cleanup = () => {
-              coquiPlayer.removeEventListener('ended', onEnded);
-              coquiPlayer.removeEventListener('error', onError);
-            };
-
-            coquiPlayer.addEventListener('ended', onEnded, { once: true });
-            coquiPlayer.addEventListener('error', onError, { once: true });
-          }).catch((error) => {
-            logger.error('Coqui TTS audio playback failed mid-chunk.', {
-              sessionId: streamSession.sessionId,
-              index,
-              error,
-            });
-            setStatus('Coqui TTS failed on the current chunk.');
-          });
-
-          if (!cancelled && token === playbackToken) {
-            await playChunk(index + 1, token);
-          }
-        };
-
-        playButton.addEventListener('click', async () => {
-          if (!items.length) {
-            logger.error('Read book requested without prepared chunks.', { hasPreparedStream, sessionId: streamSession.sessionId });
-            setStatus('No book chunks are available yet. Search and prepare a PDF first.');
-            return;
-          }
-
-          cancelled = false;
-          playbackToken += 1;
-          const token = playbackToken;
-          await ensureAudioGraph();
-          if (audioContext && audioContext.state === 'suspended') {
-            await audioContext.resume();
-          }
-
-          if (!streamReady) {
-            connectStream().catch((error) => {
-              logger.error('Streaming setup failed while Coqui TTS continued:', error);
-            });
-          }
-
-          startPromptUpdates();
-          const initialPrompt = chooseRandomPromptSentence();
-          if (initialPrompt) {
-            pushPromptUpdate(initialPrompt);
-          }
-          playChunk(0, token);
-        });
-
-        stopButton.addEventListener('click', () => {
-          stopPlayback();
-        });
-
-        window.addEventListener('beforeunload', () => {
-          stopPromptUpdates();
-          destroyViewerSession();
-          if (publisherPc) {
-            closePeerConnection(publisherPc);
-          }
-        });
-
-        connectButton.addEventListener('click', () => {
-          if (!hasPreparedStream) {
-            logger.error('Connect stream requested before a stream was prepared.', { sessionId: streamSession.sessionId });
-            setStatus('Search and prepare a PDF before connecting WHIP/WHEP.');
-            return;
-          }
-          connectStream();
-        });
-        drawCanvas(hasPreparedStream ? 'Ready to read the downloaded PDF on the published Theia canvas.' : 'Theia canvas ready. Search and prepare a PDF to start streaming.');
-      })();
+      window.lamialuxPageConfig = {
+        page: "{{ page }}",
+        hasPreparedStream: {{ stream|yesno:'true,false' }},
+        musicTrack: JSON.parse(document.getElementById('music-track-data').textContent),
+      };
     </script>
-
+    <script src="{% static 'audiobook/app.js' %}"></script>
   </body>
 </html>

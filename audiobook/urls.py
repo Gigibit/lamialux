@@ -3,6 +3,7 @@ from django.urls import path
 from .views import (
     coqui_tts,
     home,
+    music,
     stream_match,
     stream_prompt,
     stream_session,
@@ -13,6 +14,7 @@ from .views import (
 
 urlpatterns = [
     path("", home, name="home"),
+    path("music", music, name="music"),
     path("streams/match", stream_match, name="stream-match"),
     path("streams/<str:session_id>", stream_session, name="stream-session"),
     path("streams/<str:session_id>/prompt", stream_prompt, name="stream-prompt"),
