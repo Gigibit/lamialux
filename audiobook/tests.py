@@ -61,6 +61,9 @@ class HomeViewTests(TestCase):
         self.assertContains(response, "PDF found, downloaded, chunked")
         self.assertContains(response, "Open downloaded PDF source")
         self.assertContains(response, "Fear is the mind killer")
+        self.assertContains(response, '"sessionId": "abc"')
+        self.assertContains(response, '"whipUrl": "http://testserver/streams/abc/whip"')
+        self.assertContains(response, '"whepUrl": "http://testserver/streams/abc/whep"')
 
     @patch(
         "audiobook.views.WebResearchNarrativeClient.build_experience",

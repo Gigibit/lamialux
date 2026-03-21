@@ -85,6 +85,17 @@ def whip_proxy(request: HttpRequest, session_id: str) -> HttpResponse:
         status=upstream.status_code,
         content_type=upstream.headers.get("content-type", "application/sdp"),
     )
+    if upstream.status_code >= 400:
+        logger.error(
+            "WHIP upstream returned non-2xx for session '%s': status=%s body=%s",
+            session_id,
+            upstream.status_code,
+            upstream.text,
+        )
+        logger.error(
+            "Returning non-2xx response for WHIP upstream status passthrough: status=%s",
+            upstream.status_code,
+        )
     playback_url = upstream.headers.get("livepeer-playback-url") or upstream.headers.get(
         "Livepeer-Playback-Url"
     )
@@ -165,6 +176,18 @@ def _proxy_whep_request(request: HttpRequest, session_id: str, method: str) -> H
         status=upstream.status_code,
         content_type=upstream.headers.get("content-type", "application/sdp"),
     )
+    if upstream.status_code >= 400:
+        logger.error(
+            "WHEP upstream returned non-2xx for session '%s' using method %s: status=%s body=%s",
+            session_id,
+            method,
+            upstream.status_code,
+            upstream.text,
+        )
+        logger.error(
+            "Returning non-2xx response for WHEP upstream status passthrough: status=%s",
+            upstream.status_code,
+        )
     location = upstream.headers.get("location")
     if location:
         response["location"] = request.build_absolute_uri(f"/streams/{session_id}/whep/resource")
@@ -211,7 +234,13 @@ def _handle_start(
             }
             for chunk in experience.chunks
         ],
-        "stream_session": asdict(stream_session),
+        "stream_session": {
+            **asdict(stream_session),
+            "sessionId": stream_session.session_id,
+            "whipUrl": request.build_absolute_uri(f"/streams/{stream_session.session_id}/whip"),
+            "whepUrl": request.build_absolute_uri(f"/streams/{stream_session.session_id}/whep"),
+            "outputVideoUrl": stream_session.output_video_url,
+        },
     }
     context["message"] = (
         "PDF found, downloaded, chunked, and prepared for browser TTS plus "
