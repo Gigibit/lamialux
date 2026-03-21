@@ -144,10 +144,17 @@ def whip_proxy(request: HttpRequest, session_id: str) -> HttpResponse:
         "Livepeer-Playback-Url"
     )
     if playback_url:
+        logger.error(
+            "WHIP upstream returned playback URL '%s' for session '%s'; "
+            "preserving existing WHEP URL '%s'.",
+            playback_url,
+            session_id,
+            stream.whep_url,
+        )
         STREAM_SESSIONS[session_id] = StreamSession(
             session_id=stream.session_id,
             whip_url=stream.whip_url,
-            whep_url=playback_url,
+            whep_url=stream.whep_url,
             output_video_url=playback_url,
         )
         response["livepeer-playback-url"] = request.build_absolute_uri(

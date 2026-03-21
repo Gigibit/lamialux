@@ -146,6 +146,62 @@ class HomeViewTests(TestCase):
         self.assertEqual(response.status_code, 502)
         self.assertContains(response, "WHEP upstream unavailable.", status_code=502)
 
+    @patch("audiobook.views.httpx.Client")
+    def test_whip_proxy_preserves_whep_url_when_playback_url_header_is_present(
+        self, http_client
+    ) -> None:
+        STREAM_SESSIONS["abc"] = StreamSession(
+            session_id="abc",
+            whip_url="https://upstream.example/whip",
+            whep_url="https://upstream.example/whep",
+            output_video_url="https://upstream.example/original-output",
+        )
+
+        class DummyResponse:
+            status_code = 201
+            text = "v=0"
+            headers = {
+                "content-type": "application/sdp",
+                "livepeer-playback-url": "https://playback.example/hls/stream.m3u8",
+                "location": "https://upstream.example/whip/resource/123",
+            }
+
+        class DummyClient:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+            def post(self, *args, **kwargs):
+                return DummyResponse()
+
+        http_client.return_value = DummyClient()
+
+        response = self.client.post(
+            "/streams/abc/whip",
+            data="v=0",
+            content_type="application/sdp",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(
+            STREAM_SESSIONS["abc"].whep_url,
+            "https://upstream.example/whep",
+        )
+        self.assertEqual(
+            STREAM_SESSIONS["abc"].output_video_url,
+            "https://playback.example/hls/stream.m3u8",
+        )
+        self.assertEqual(
+            response["livepeer-playback-url"],
+            "http://testserver/streams/abc/whep",
+        )
+        self.assertEqual(
+            response["location"],
+            "http://testserver/streams/abc/whep/resource",
+        )
+
     def test_stream_match_returns_aliased_existing_stream_for_browser_uuid(self) -> None:
         STREAM_SESSIONS["upstream-abc"] = StreamSession(
             session_id="upstream-abc",
