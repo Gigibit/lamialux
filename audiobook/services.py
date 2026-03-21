@@ -370,7 +370,7 @@ class WebResearchNarrativeClient:
 
 class DaydreamClient:
     def __init__(self) -> None:
-        self.base_url = os.getenv("DAYDREAM_BASE_URL", "")
+        self.base_url = os.getenv("DAYDREAM_BASE_URL", "https://api.daydream.live")
         self.api_key = os.getenv("DAYDREAM_API_KEY", "")
         self.timeout = float(os.getenv("DAYDREAM_TIMEOUT_SECONDS", "30"))
 
@@ -380,17 +380,48 @@ class DaydreamClient:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
+    def _start_payload(self, audio_stream_url: str, prompt: str) -> dict[str, object]:
+        return {
+            "pipeline": os.getenv("DAYDREAM_PIPELINE", "streamdiffusion"),
+            "params": {
+                "model_id": os.getenv("DAYDREAM_MODEL_ID", "stabilityai/sd-turbo"),
+                "prompt": prompt,
+            },
+            "name": os.getenv("DAYDREAM_STREAM_NAME", "LamiaLux stream"),
+            "output_rtmp_url": audio_stream_url,
+        }
+
+    def _start_endpoint(self) -> str:
+        return os.getenv("DAYDREAM_CANVAS_STREAM_PATH", "/v1/streams")
+
+    def _update_endpoint(self, session_id: str) -> str:
+        endpoint_template = os.getenv(
+            "DAYDREAM_PROMPT_UPDATE_PATH_TEMPLATE",
+            "/v1/streams/{session_id}",
+        )
+        return endpoint_template.format(session_id=session_id)
+
+    def _extract_stream_response(self, data: dict[str, object]) -> dict[str, str]:
+        session_id = str(data.get("id") or data.get("sessionId") or "")
+        output_video_url = str(
+            data.get("output_stream_url")
+            or data.get("outputVideoUrl")
+            or data.get("whep_url")
+            or data.get("whip_url")
+            or ""
+        )
+        if not session_id or not output_video_url:
+            logger.error("Daydream response missing stream identifiers/output URL: %s", data)
+            raise UpstreamServiceError("Daydream returned incomplete stream data.")
+        return {"session_id": session_id, "output_video_url": output_video_url}
+
     def start_canvas_stream(self, audio_stream_url: str, prompt: str) -> dict[str, str]:
-        endpoint = os.getenv("DAYDREAM_CANVAS_STREAM_PATH", "/api/canvas/streams")
         if not self.base_url:
             logger.error("DAYDREAM_BASE_URL missing while starting stream.")
             raise UpstreamServiceError("Daydream configuration is incomplete.")
 
-        payload = {
-            "audioInputStream": audio_stream_url,
-            "prompt": prompt,
-            "engine": os.getenv("DAYDREAM_ENGINE", "stable-diffusion"),
-        }
+        endpoint = self._start_endpoint()
+        payload = self._start_payload(audio_stream_url=audio_stream_url, prompt=prompt)
 
         with httpx.Client(timeout=self.timeout) as client:
             try:
@@ -402,59 +433,57 @@ class DaydreamClient:
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
                 logger.error(
-                    "Daydream stream start failed with status %s, payload=%s, error=%s",
+                    "Daydream stream start failed with status %s at %s, payload=%s, error=%s",
                     exc.response.status_code,
+                    endpoint,
                     payload,
                     exc,
                 )
                 raise UpstreamServiceError("Daydream failed to initialize the stream.") from exc
             except httpx.HTTPError as exc:
                 logger.error(
-                    "Daydream stream start connection error with payload=%s: %s",
+                    "Daydream stream start connection error at %s with payload=%s: %s",
+                    endpoint,
                     payload,
                     exc,
                 )
                 raise UpstreamServiceError("Daydream stream service unavailable.") from exc
 
-        data = response.json()
-        session_id = data.get("sessionId", "")
-        output_video_url = data.get("outputVideoUrl", "")
-        if not session_id or not output_video_url:
-            logger.error("Daydream response missing sessionId/outputVideoUrl: %s", data)
-            raise UpstreamServiceError("Daydream returned incomplete stream data.")
-
-        return {"session_id": session_id, "output_video_url": output_video_url}
+        return self._extract_stream_response(response.json())
 
     def update_prompt(self, session_id: str, prompt: str) -> None:
-        endpoint_template = os.getenv(
-            "DAYDREAM_PROMPT_UPDATE_PATH_TEMPLATE",
-            "/api/canvas/streams/{session_id}/prompt",
-        )
-        endpoint = endpoint_template.format(session_id=session_id)
+        endpoint = self._update_endpoint(session_id=session_id)
+        payload = {
+            "pipeline": os.getenv("DAYDREAM_PIPELINE", "streamdiffusion"),
+            "params": {"prompt": prompt},
+        }
 
         with httpx.Client(timeout=self.timeout) as client:
             try:
                 response = client.patch(
                     f"{self.base_url}{endpoint}",
                     headers=self._headers(),
-                    json={"prompt": prompt},
+                    json=payload,
                 )
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
                 logger.error(
-                    "Daydream prompt update failed with status %s for session %s "
-                    "and prompt '%s': %s",
+                    "Daydream prompt update failed with status %s at %s for session %s "
+                    "and payload=%s: %s",
                     exc.response.status_code,
+                    endpoint,
                     session_id,
-                    prompt,
+                    payload,
                     exc,
                 )
                 raise UpstreamServiceError("Unable to update Daydream prompt.") from exc
             except httpx.HTTPError as exc:
                 logger.error(
-                    "Daydream prompt update connection error for session %s and prompt '%s': %s",
+                    "Daydream prompt update connection error at %s for session %s "
+                    "and payload=%s: %s",
+                    endpoint,
                     session_id,
-                    prompt,
+                    payload,
                     exc,
                 )
                 raise UpstreamServiceError("Daydream prompt update service unavailable.") from exc
