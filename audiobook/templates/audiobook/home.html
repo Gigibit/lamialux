@@ -3,45 +3,27 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>LamiaLux · AI Audiobook Canvas</title>
+    <title>LamiaLux · PDF Reader Stream</title>
     {% load static %}
     <link rel="stylesheet" href="{% static 'audiobook/style.css' %}" />
   </head>
   <body>
     <main class="container">
-      <header class="hero glass">
+      <section class="hero panel">
         <div>
-          <p class="badge">Narrative mode · Daydream canvas · Livepeer WHIP/WHEP</p>
+          <p class="eyebrow">PDF search · Browser TTS · Livepeer WHIP/WHEP</p>
           <h1>LamiaLux</h1>
           <p class="subtitle">
-            Start a Livepeer-backed Daydream session, choose a browser voice, read the audiobook aloud,
-            and publish the synthesized narration plus a generated canvas through WHIP while monitoring playback over WHEP.
+            Search for a book PDF, download it, read it with browser text-to-speech,
+            keep audio local, and publish the same narration session into Livepeer WHIP while
+            monitoring the WHEP output video.
           </p>
         </div>
-        <aside class="mode-card">
-          <span class="mode-label">Active mode</span>
-          <strong>{{ narrative_mode }}</strong>
-          <p>
-            {% if narrative_mode == 'WEB_RESEARCH_TTS' %}
-              Searches the web for a PDF, chunks chapter content, stores it locally, and prepares synchronized narration.
-            {% else %}
-              Uses the existing Storytel request flow and now narrates it into a Livepeer/Daydream WHIP canvas.
-            {% endif %}
-          </p>
-        </aside>
-      </header>
+      </section>
 
-      <section class="panel glass">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">1 · Input</p>
-            <h2>Build a narrative session</h2>
-          </div>
-          <p class="hint">The same form adapts automatically to the configured provider.</p>
-        </div>
-        <form method="post" class="stack request-form">
+      <section class="panel">
+        <form method="post" class="request-form">
           {% csrf_token %}
-          <input type="hidden" name="action" value="start" />
           <label>
             <span>{{ book_form.book_query.label }}</span>
             {{ book_form.book_query }}
@@ -49,114 +31,52 @@
           <label>
             <span>{{ book_form.daydream_prompt.label }}</span>
             {{ book_form.daydream_prompt }}
-            <small>{{ book_form.daydream_prompt.help_text }}</small>
           </label>
-          <button type="submit">Launch narrative canvas</button>
+          <button type="submit">Search, download, and prepare stream</button>
         </form>
       </section>
 
-      {% if message %}<p class="message glass">{{ message }}</p>{% endif %}
-      {% if error %}<p class="error glass">{{ error }}</p>{% endif %}
+      {% if message %}<p class="message">{{ message }}</p>{% endif %}
+      {% if error %}<p class="error">{{ error }}</p>{% endif %}
 
       {% if stream %}
-        <section class="panel glass stream-panel">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">2 · Playback</p>
-              <h2>Livepeer-backed Daydream output</h2>
-            </div>
-            <p class="hint">Session {{ stream.session_id }}</p>
-          </div>
-
-          <div class="stream-layout">
-            <div class="player-column">
-              <div class="meta">
-                {% if stream.cover_url %}<img src="{{ stream.cover_url }}" alt="Cover" />{% endif %}
-                <div>
-                  <p><strong>{{ stream.title }}</strong></p>
-                  <p>{{ stream.author }}</p>
-                  <p class="small">Mode: {{ stream.mode }}</p>
-                  {% if stream.pdf_url %}
-                    <p class="small"><a href="{{ stream.pdf_url }}" target="_blank" rel="noreferrer">Open sourced PDF</a></p>
-                  {% endif %}
-                </div>
+        <section class="stream-layout">
+          <article class="panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Live output</p>
+                <h2>{{ stream.title }}</h2>
               </div>
-              <video id="whep-player" controls autoplay playsinline muted></video>
-              <canvas id="narration-canvas" width="720" height="1280" hidden></canvas>
-
-              <div class="glass narrative-console">
-                <div>
-                  <p class="eyebrow">Narration console</p>
-                  <h3>Choose a voice and publish narration into WHIP</h3>
-                  <p class="small">The selected narration voice is rendered to MP3, captured together with the illustrated canvas, and the combined stream is sent to Daydream over WHIP.</p>
-                </div>
-                <div class="console-grid">
-                  <label>
-                    Voice
-                    <select id="voice-select"></select>
-                  </label>
-                  <label>
-                    Rate
-                    <input id="voice-rate" type="range" min="0.7" max="1.2" step="0.05" value="0.95" />
-                  </label>
-                </div>
-                <div class="console-actions">
-                  <button type="button" id="connect-stream">Connect WHIP/WHEP</button>
-                  <button type="button" id="play-tts">Play synced narration</button>
-                  <button type="button" id="stop-tts" class="secondary">Stop</button>
-                </div>
-                <p class="small" id="stream-status">Idle.</p>
-              </div>
+              <p class="small">Session {{ stream.session_id }}</p>
             </div>
-
-            <div class="sidebar-column">
-              {% if stream.summary %}
-                <article class="glass insight-card">
-                  <p class="eyebrow">PDF digest</p>
-                  <p>{{ stream.summary }}</p>
-                  <p class="small">Stored in {{ stream.storage_path }}</p>
-                </article>
-              {% endif %}
-
-              <form method="post" class="stack prompt-update glass">
-                {% csrf_token %}
-                <input type="hidden" name="action" value="update_prompt" />
-                <input type="hidden" name="session_id" value="{{ stream.session_id }}" />
-                <input type="hidden" name="video_url" value="{{ stream.video_url }}" />
-                <input type="hidden" name="title" value="{{ stream.title }}" />
-                <input type="hidden" name="author" value="{{ stream.author }}" />
-                <input type="hidden" name="cover_url" value="{{ stream.cover_url }}" />
-                <input type="hidden" name="mode" value="{{ stream.mode }}" />
-                <input type="hidden" name="summary" value="{{ stream.summary }}" />
-                <input type="hidden" name="pdf_url" value="{{ stream.pdf_url }}" />
-                <input type="hidden" name="storage_path" value="{{ stream.storage_path }}" />
-                <label>
-                  Update Daydream prompt (optional)
-                  <input id="prompt-input" name="daydream_prompt" type="text" placeholder="go with the flow" value="{{ stream.prompt }}" />
-                </label>
-                <button type="submit">Update prompt</button>
-              </form>
-
-              {% if stream.chunks %}
-                <section class="glass chunk-list">
-                  <div class="section-heading compact">
-                    <div>
-                      <p class="eyebrow">Chunk queue</p>
-                      <h3>{{ stream.chunks|length }} synchronized prompts</h3>
-                    </div>
-                  </div>
-                  <ol>
-                    {% for chunk in stream.chunks %}
-                      <li data-prompt="{{ chunk.prompt|escape }}" data-text="{{ chunk.text|escape }}">
-                        <strong>{{ chunk.chapter_title }} · {{ chunk.chunk_index }}</strong>
-                        <p>{{ chunk.text|truncatechars:220 }}</p>
-                      </li>
-                    {% endfor %}
-                  </ol>
-                </section>
-              {% endif %}
+            <p class="small">{{ stream.author }}</p>
+            <p class="small"><a href="{{ stream.pdf_url }}" target="_blank" rel="noreferrer">Open downloaded PDF source</a></p>
+            <video id="whep-player" controls autoplay playsinline muted></video>
+            <canvas id="narration-canvas" width="1280" height="720"></canvas>
+            <div class="console-actions">
+              <button type="button" id="connect-stream">Connect WHIP/WHEP</button>
+              <button type="button" id="play-tts">Read book</button>
+              <button type="button" id="stop-tts" class="secondary">Stop</button>
             </div>
-          </div>
+            <p id="stream-status" class="small">Idle.</p>
+            <p class="small note">
+              Browser speech synthesis plays locally. Because browsers do not reliably expose native TTS as a capturable
+              audio track, WHIP receives the illustrated canvas plus a Web Audio narration bed so the stream remains valid.
+            </p>
+          </article>
+
+          <aside class="panel chunk-list">
+            <p class="eyebrow">Book chunks</p>
+            <p class="small">Stored in {{ stream.storage_path }}</p>
+            <ol>
+              {% for chunk in stream.chunks %}
+                <li data-text="{{ chunk.text|escape }}">
+                  <strong>{{ chunk.chapter_title }} · {{ chunk.chunk_index }}</strong>
+                  <p>{{ chunk.text|truncatechars:240 }}</p>
+                </li>
+              {% endfor %}
+            </ol>
+          </aside>
         </section>
         {{ stream.stream_session|json_script:"stream-session-data" }}
       {% endif %}
@@ -167,132 +87,101 @@
         const playButton = document.getElementById('play-tts');
         const stopButton = document.getElementById('stop-tts');
         const connectButton = document.getElementById('connect-stream');
-        const promptInput = document.getElementById('prompt-input');
-        const items = Array.from(document.querySelectorAll('.chunk-list li'));
-        const voiceSelect = document.getElementById('voice-select');
-        const voiceRate = document.getElementById('voice-rate');
         const statusEl = document.getElementById('stream-status');
         const canvas = document.getElementById('narration-canvas');
         const video = document.getElementById('whep-player');
         const streamSessionNode = document.getElementById('stream-session-data');
+        const items = Array.from(document.querySelectorAll('.chunk-list li'));
 
-        if (!playButton || !stopButton || !connectButton || !promptInput || !voiceSelect || !voiceRate || !statusEl || !canvas || !video || !streamSessionNode) {
+        if (!playButton || !stopButton || !connectButton || !statusEl || !canvas || !video || !streamSessionNode || !items.length) {
           return;
         }
 
         const streamSession = JSON.parse(streamSessionNode.textContent);
-        const narrationItems = items.length ? items : [{ dataset: { text: promptInput.value || 'Start reading the audiobook.', prompt: promptInput.value || 'go with the flow' }, classList: { add() {}, remove() {} } }];
         const canvasContext = canvas.getContext('2d');
-        let currentIndex = 0;
-        let cancelled = false;
-        const voices = [
-          { id: 'alloy', label: 'Alloy (OpenAI)' },
-          { id: 'verse', label: 'Verse (OpenAI)' },
-          { id: 'aria', label: 'Aria (OpenAI)' },
-          { id: 'sage', label: 'Sage (OpenAI)' },
-        ];
         let publisherPc = null;
         let viewerPc = null;
-        let localCompositeStream = null;
-        let audioElement = null;
-        let locationHeader = null;
+        let currentIndex = 0;
+        let cancelled = false;
+        let animationFrameId = null;
+        let audioContext = null;
+        let destination = null;
+        let gainNode = null;
+        let oscillator = null;
+        let compositeStream = null;
 
-        voices.forEach((voice) => {
-          const option = document.createElement('option');
-          option.value = voice.id;
-          option.textContent = voice.label;
-          voiceSelect.appendChild(option);
-        });
         const setStatus = (message) => {
           statusEl.textContent = message;
         };
 
-        const drawCanvas = (text, prompt) => {
-          canvas.hidden = false;
-          canvasContext.fillStyle = '#081121';
+        const drawCanvas = (text) => {
+          canvasContext.fillStyle = '#07111f';
           canvasContext.fillRect(0, 0, canvas.width, canvas.height);
-          const gradient = canvasContext.createLinearGradient(0, 0, canvas.width, canvas.height);
-          gradient.addColorStop(0, '#7c3aed');
-          gradient.addColorStop(1, '#06b6d4');
-          canvasContext.fillStyle = gradient;
-          canvasContext.fillRect(40, 40, canvas.width - 80, canvas.height - 80);
-          canvasContext.fillStyle = 'rgba(8,17,33,0.88)';
-          canvasContext.fillRect(75, 100, canvas.width - 150, canvas.height - 200);
-          canvasContext.fillStyle = '#f8fafc';
+          canvasContext.fillStyle = '#6ee7f9';
           canvasContext.font = 'bold 42px sans-serif';
-          canvasContext.fillText('LamiaLux Live Narration', 110, 180);
+          canvasContext.fillText('LamiaLux live PDF reading', 48, 72);
+          canvasContext.fillStyle = '#d9e7ff';
           canvasContext.font = '28px sans-serif';
-          const wrap = (value, startY) => {
-            const words = value.split(' ');
-            let line = '';
-            let y = startY;
-            words.forEach((word) => {
-              const testLine = `${line}${word} `;
-              if (canvasContext.measureText(testLine).width > canvas.width - 220) {
-                canvasContext.fillText(line, 110, y);
-                line = `${word} `;
-                y += 42;
-              } else {
-                line = testLine;
-              }
-            });
-            if (line) {
-              canvasContext.fillText(line, 110, y);
+          const words = text.split(' ');
+          let line = '';
+          let y = 140;
+          words.forEach((word) => {
+            const testLine = `${line}${word} `;
+            if (canvasContext.measureText(testLine).width > canvas.width - 96) {
+              canvasContext.fillText(line, 48, y);
+              line = `${word} `;
+              y += 38;
+            } else {
+              line = testLine;
             }
-          };
-          canvasContext.fillStyle = '#cbd5e1';
-          wrap(prompt, 280);
-          canvasContext.fillStyle = '#ffffff';
-          wrap(text, 520);
+          });
+          if (line) {
+            canvasContext.fillText(line, 48, y);
+          }
         };
 
         const ensureCompositeStream = async () => {
-          if (localCompositeStream) {
-            return localCompositeStream;
+          if (compositeStream) {
+            return compositeStream;
           }
-          audioElement = new Audio();
-          audioElement.crossOrigin = 'anonymous';
-          audioElement.preload = 'auto';
+          audioContext = new AudioContext();
+          destination = audioContext.createMediaStreamDestination();
+          gainNode = audioContext.createGain();
+          gainNode.gain.value = 0.03;
+          oscillator = audioContext.createOscillator();
+          oscillator.type = 'sine';
+          oscillator.frequency.value = 220;
+          oscillator.connect(gainNode);
+          gainNode.connect(destination);
+          oscillator.start();
+
           const canvasStream = canvas.captureStream(24);
-          const audioStream = audioElement.captureStream ? audioElement.captureStream() : audioElement.mozCaptureStream();
-          localCompositeStream = new MediaStream([
+          compositeStream = new MediaStream([
             ...canvasStream.getVideoTracks(),
-            ...audioStream.getAudioTracks(),
+            ...destination.stream.getAudioTracks(),
           ]);
-          return localCompositeStream;
+          return compositeStream;
         };
 
         const publishWhip = async () => {
-          const compositeStream = await ensureCompositeStream();
-          publisherPc = new RTCPeerConnection({
-            iceServers: [
-              { urls: 'stun:stun.l.google.com:19302' },
-              { urls: 'stun:stun1.l.google.com:19302' },
-            ],
-          });
-          compositeStream.getTracks().forEach((track) => publisherPc.addTrack(track, compositeStream));
+          const stream = await ensureCompositeStream();
+          publisherPc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+          stream.getTracks().forEach((track) => publisherPc.addTrack(track, stream));
           const offer = await publisherPc.createOffer();
           await publisherPc.setLocalDescription(offer);
-          const response = await fetch(streamSession.whip_url ? streamSession.whip_url : streamSession.whipUrl || `${window.location.origin}/streams/${streamSession.session_id || streamSession.sessionId}/whip`, {
+          const response = await fetch(streamSession.whipUrl || `${window.location.origin}/streams/${streamSession.sessionId}/whip`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/sdp' },
             body: publisherPc.localDescription.sdp,
           });
-          if (response.status !== 201 && response.status !== 200) {
+          if (!response.ok) {
             throw new Error(`WHIP connection failed with status ${response.status}`);
           }
-          const answerSdp = await response.text();
-          await publisherPc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
-          locationHeader = response.headers.get('location');
+          await publisherPc.setRemoteDescription({ type: 'answer', sdp: await response.text() });
         };
 
         const startWhepPlayback = async () => {
-          viewerPc = new RTCPeerConnection({
-            iceServers: [
-              { urls: 'stun:stun.l.google.com:19302' },
-              { urls: 'stun:stun1.l.google.com:19302' },
-            ],
-          });
+          viewerPc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
           viewerPc.addTransceiver('video', { direction: 'recvonly' });
           viewerPc.addTransceiver('audio', { direction: 'recvonly' });
           viewerPc.ontrack = (event) => {
@@ -302,7 +191,7 @@
           };
           const offer = await viewerPc.createOffer();
           await viewerPc.setLocalDescription(offer);
-          const response = await fetch(streamSession.whep_url ? streamSession.whep_url : streamSession.whepUrl || `${window.location.origin}/streams/${streamSession.session_id || streamSession.sessionId}/whep`, {
+          const response = await fetch(streamSession.whepUrl || `${window.location.origin}/streams/${streamSession.sessionId}/whep`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/sdp' },
             body: viewerPc.localDescription.sdp,
@@ -310,102 +199,73 @@
           if (!response.ok) {
             throw new Error(`WHEP connection failed with status ${response.status}`);
           }
-          const answerSdp = await response.text();
-          await viewerPc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
-          video.muted = false;
+          await viewerPc.setRemoteDescription({ type: 'answer', sdp: await response.text() });
           await video.play().catch(() => {});
         };
 
         const connectStream = async () => {
-          setStatus('Connecting WHIP…');
-          drawCanvas(promptInput.value || 'Narration idle', promptInput.value || 'go with the flow');
           try {
+            setStatus('Connecting WHIP/WHEP...');
+            drawCanvas('Preparing narration stream...');
             await publishWhip();
-            setStatus('WHIP connected. Connecting WHEP playback…');
             await startWhepPlayback();
-            setStatus('WHIP/WHEP connected. Ready to read.');
+            setStatus('WHIP/WHEP connected.');
           } catch (error) {
-            console.error('Failed to connect Livepeer session:', error);
-            setStatus(`Connection error: ${error.message}`);
+            console.error(error);
+            setStatus(error.message);
           }
         };
 
-        const speakChunk = () => {
-          if (cancelled || currentIndex >= narrationItems.length) {
-            setStatus('Narration complete.');
+        const updateTone = () => {
+          if (!gainNode || cancelled) {
             return;
           }
-
-          const item = narrationItems[currentIndex];
-          const text = item.dataset?.text || '';
-          const prompt = item.dataset?.prompt || '';
-          promptInput.value = prompt;
-          items.forEach((entry) => entry.classList.remove('active'));
-          item.classList?.add?.('active');
-          drawCanvas(text, prompt);
-
-          const selectedVoice = voiceSelect.value || 'alloy';
-          const body = new URLSearchParams({ text, voice: selectedVoice, rate: String(voiceRate.value || 0.95) });
-          (async () => {
-            try {
-              if (!publisherPc || !viewerPc) {
-                await connectStream();
-              }
-              setStatus(`Reading chunk ${currentIndex + 1} of ${narrationItems.length} with ${selectedVoice}.`);
-              const response = await fetch('/narrate', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: body.toString(),
-              });
-              if (!response.ok) {
-                throw new Error(`Narration request failed with status ${response.status}`);
-              }
-              const audioBlob = await response.blob();
-              audioElement.src = URL.createObjectURL(audioBlob);
-              audioElement.playbackRate = Number(voiceRate.value || 0.95);
-              audioElement.onended = () => {
-                currentIndex += 1;
-                speakChunk();
-              };
-              audioElement.onerror = () => {
-                setStatus('Narration playback error.');
-              };
-              await audioElement.play();
-            } catch (error) {
-              console.error('Narration pipeline error:', error);
-              setStatus(`Narration error: ${error.message}`);
-            }
-          })();
+          gainNode.gain.value = 0.02 + ((currentIndex % 4) * 0.01);
+          animationFrameId = window.setTimeout(updateTone, 300);
         };
 
-        connectButton.addEventListener('click', () => {
-          connectStream();
-        });
+        const speakChunk = (index) => {
+          if (cancelled || index >= items.length) {
+            setStatus('Reading complete.');
+            return;
+          }
+          currentIndex = index;
+          items.forEach((item, itemIndex) => item.classList.toggle('active', itemIndex === index));
+          const text = items[index].dataset.text;
+          drawCanvas(text);
+          setStatus(`Reading chunk ${index + 1} of ${items.length}...`);
+          const utterance = new SpeechSynthesisUtterance(text);
+          utterance.rate = 1;
+          utterance.onend = () => speakChunk(index + 1);
+          utterance.onerror = () => {
+            setStatus('Browser TTS failed on the current chunk.');
+          };
+          window.speechSynthesis.speak(utterance);
+        };
 
-        playButton.addEventListener('click', () => {
+        playButton.addEventListener('click', async () => {
           cancelled = false;
-          currentIndex = 0;
-          if (audioElement) { audioElement.pause(); }
-          speakChunk();
+          if (audioContext && audioContext.state === 'suspended') {
+            await audioContext.resume();
+          }
+          if (!publisherPc || !viewerPc) {
+            await connectStream();
+          }
+          updateTone();
+          speakChunk(0);
         });
 
-        stopButton.addEventListener('click', async () => {
+        stopButton.addEventListener('click', () => {
           cancelled = true;
-          if (audioElement) { audioElement.pause(); audioElement.currentTime = 0; }
-          items.forEach((entry) => entry.classList.remove('active'));
-          if (viewerPc) {
-            viewerPc.close();
-            viewerPc = null;
+          window.speechSynthesis.cancel();
+          if (animationFrameId) {
+            window.clearTimeout(animationFrameId);
           }
-          if (publisherPc) {
-            publisherPc.close();
-            publisherPc = null;
-          }
-          if (locationHeader) {
-            await fetch(locationHeader, { method: 'DELETE' }).catch(() => {});
-          }
-          setStatus('Stopped.');
+          setStatus('Reading stopped.');
         });
+
+        connectButton.addEventListener('click', connectStream);
+        drawCanvas('Ready to read the downloaded PDF.');
       })();
     </script>
   </body>
