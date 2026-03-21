@@ -329,6 +329,10 @@
             body: publisherPc.localDescription.sdp,
           });
           if (!response.ok) {
+            console.error('WHIP publish request returned a non-2xx response.', {
+              sessionId: streamSession.sessionId,
+              status: response.status,
+            });
             throw new Error(`WHIP connection failed with status ${response.status}`);
           }
           await publisherPc.setRemoteDescription({ type: 'answer', sdp: await response.text() });
@@ -362,10 +366,14 @@
 
         const startWhepPlayback = async () => {
           validateStreamSession();
-          const maxAttempts = 6;
+          const initialPollIntervalMs = 5000;
+          const maxPollIntervalMs = 30000;
+          let attempt = 0;
+          let pollIntervalMs = initialPollIntervalMs;
           let lastError;
 
-          for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+          while (pollIntervalMs <= maxPollIntervalMs) {
+            attempt += 1;
             await destroyViewerSession();
             const peerConnection = createViewerPeerConnection();
             const offer = await peerConnection.createOffer();
@@ -386,14 +394,22 @@
             }
 
             lastError = new Error(`WHEP connection failed with status ${response.status}`);
-            console.warn('WHEP not ready yet; retrying after WHIP has started streaming.', {
+            console.error('WHEP playback request returned a non-2xx response; retrying with backoff.', {
               attempt,
               status: response.status,
+              pollIntervalMs,
+              sessionId: streamSession.sessionId,
             });
-            setStatus(`WHIP connected. Waiting for WHEP (${attempt}/${maxAttempts})...`);
-            await sleep(1500);
+            setStatus(`WHIP connected. Waiting for WHEP (attempt ${attempt}, retry in ${Math.round(pollIntervalMs / 1000)}s)...`);
+            await sleep(pollIntervalMs);
+            pollIntervalMs = Math.min(pollIntervalMs + 2000, maxPollIntervalMs + 2000);
           }
 
+          console.error('WHEP playback failed after exhausting the configured backoff retries.', {
+            attempts: attempt,
+            sessionId: streamSession.sessionId,
+            lastError,
+          });
           throw lastError;
         };
 
