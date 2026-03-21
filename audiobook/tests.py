@@ -6,9 +6,11 @@ from django.test import Client, TestCase, override_settings
 from audiobook.services import (
     DaydreamClient,
     NarrativeChunk,
+    StreamSession,
     UpstreamServiceError,
     WebResearchNarrativeClient,
 )
+from audiobook.views import STREAM_SESSIONS
 
 
 class HomeViewTests(TestCase):
@@ -25,7 +27,7 @@ class HomeViewTests(TestCase):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
 
-    @patch("audiobook.views.DaydreamClient.start_canvas_stream")
+    @patch("audiobook.views.DaydreamClient.create_livepeer_stream_session")
     @patch("audiobook.views.StorytelClient.find_audiobook")
     def test_start_stream_success(self, find_audiobook, start_stream) -> None:
         find_audiobook.return_value = type(
@@ -38,7 +40,12 @@ class HomeViewTests(TestCase):
                 "cover_url": "",
             },
         )()
-        start_stream.return_value = {"session_id": "abc", "output_video_url": "http://video"}
+        start_stream.return_value = StreamSession(
+            session_id="abc",
+            whip_url="https://upstream.example/whip",
+            whep_url="https://upstream.example/whep",
+            output_video_url="https://upstream.example/whep",
+        )
 
         response = self.client.post(
             "/",
@@ -47,7 +54,7 @@ class HomeViewTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Stream initialized")
-        self.assertContains(response, "http://video")
+        self.assertContains(response, "/streams/abc/whep")
 
     @patch(
         "audiobook.views.StorytelClient.find_audiobook",
@@ -63,7 +70,7 @@ class HomeViewTests(TestCase):
 
     @override_settings()
     @patch.dict("os.environ", {"NARRATIVE_MODE_PROVIDER": "WEB_RESEARCH_TTS"}, clear=False)
-    @patch("audiobook.views.DaydreamClient.start_canvas_stream")
+    @patch("audiobook.views.DaydreamClient.create_livepeer_stream_session")
     @patch("audiobook.views.WebResearchNarrativeClient.build_experience")
     def test_start_web_research_mode_success(self, build_experience, start_stream) -> None:
         build_experience.return_value = type(
@@ -87,7 +94,12 @@ class HomeViewTests(TestCase):
                 ],
             },
         )()
-        start_stream.return_value = {"session_id": "abc", "output_video_url": "http://video"}
+        start_stream.return_value = StreamSession(
+            session_id="abc",
+            whip_url="https://upstream.example/whip",
+            whep_url="https://upstream.example/whep",
+            output_video_url="https://upstream.example/whep",
+        )
 
         response = self.client.post(
             "/", {"action": "start", "book_query": "Dune", "daydream_prompt": ""}
@@ -214,7 +226,7 @@ class DaydreamClientTests(TestCase):
                 return None
 
             def json(self) -> dict[str, str]:
-                return {"id": "stream-123", "output_stream_url": "https://video.example/stream"}
+                return {"id": "stream-123", "whip_url": "https://video.example/whip", "whep_url": "https://video.example/stream"}
 
         class DummyHttpClient:
             def __init__(self, *args, **kwargs) -> None:
@@ -250,7 +262,7 @@ class DaydreamClientTests(TestCase):
                     "prompt": "Dreamy skyline",
                 },
                 "name": "LamiaLux stream",
-                "output_rtmp_url": "https://audio.example/live",
+                "input_type": "whip",
             },
         )
 
@@ -302,7 +314,11 @@ class DaydreamClientTests(TestCase):
                 return None
 
             def json(self) -> dict[str, str]:
-                return {"id": "stream-legacy", "output_stream_url": "https://video.example/legacy"}
+                return {
+                    "id": "stream-legacy",
+                    "whip_url": "https://video.example/whip-legacy",
+                    "whep_url": "https://video.example/legacy",
+                }
 
         class DummyHttpClient:
             def __enter__(self):
@@ -350,6 +366,58 @@ class DaydreamClientTests(TestCase):
                 for message in logs.output
             )
         )
+
+
+class StreamProxyViewTests(TestCase):
+    def setUp(self) -> None:
+        self.client = Client()
+        STREAM_SESSIONS.clear()
+        STREAM_SESSIONS["abc"] = StreamSession(
+            session_id="abc",
+            whip_url="https://upstream.example/whip",
+            whep_url="https://upstream.example/whep",
+            output_video_url="https://upstream.example/whep",
+        )
+
+    def test_stream_session_returns_local_proxy_urls(self) -> None:
+        response = self.client.get("/streams/abc")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["sessionId"], "abc")
+        self.assertTrue(response.json()["whipUrl"].endswith("/streams/abc/whip"))
+        self.assertTrue(response.json()["whepUrl"].endswith("/streams/abc/whep"))
+
+    @patch("audiobook.views.httpx.Client")
+    def test_whip_proxy_updates_whep_url(self, httpx_client) -> None:
+        class DummyResponse:
+            status_code = 201
+            text = "answer-sdp"
+            headers = {
+                "content-type": "application/sdp",
+                "livepeer-playback-url": "https://upstream.example/whep-playback",
+            }
+
+        class DummyClient:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+            def post(self, *args, **kwargs):
+                return DummyResponse()
+
+        httpx_client.return_value = DummyClient()
+        response = self.client.post(
+            "/streams/abc/whip",
+            data="v=0",
+            content_type="application/sdp",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response["livepeer-playback-url"].split("/")[-1], "whep")
+        self.assertEqual(STREAM_SESSIONS["abc"].whep_url, "https://upstream.example/whep-playback")
+
 
 
 class HomeViewUnexpectedErrorTests(TestCase):

@@ -368,6 +368,57 @@ class WebResearchNarrativeClient:
             connection.commit()
 
 
+@dataclass
+class StreamSession:
+    session_id: str
+    whip_url: str
+    whep_url: str
+    output_video_url: str
+
+
+class OpenAITTSClient:
+    def __init__(self) -> None:
+        self.api_key = os.getenv("OPENAI_API_KEY", "")
+        self.base_url = os.getenv("OPENAI_TTS_BASE_URL", "https://api.openai.com/v1")
+        self.model = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
+        self.timeout = float(os.getenv("OPENAI_TTS_TIMEOUT_SECONDS", "60"))
+
+    def synthesize(self, text: str, voice: str) -> bytes:
+        if not self.api_key:
+            logger.error("OPENAI_API_KEY missing while synthesizing narration.")
+            raise UpstreamServiceError("Narration voice service is not configured.")
+
+        payload = {
+            "model": self.model,
+            "voice": voice or "alloy",
+            "input": text,
+            "format": "mp3",
+        }
+        with httpx.Client(timeout=self.timeout) as client:
+            try:
+                response = client.post(
+                    f"{self.base_url}/audio/speech",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                )
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                logger.error(
+                    "OpenAI TTS failed with status %s for voice '%s': %s",
+                    exc.response.status_code,
+                    voice,
+                    exc,
+                )
+                raise UpstreamServiceError("Narration voice generation failed.") from exc
+            except httpx.HTTPError as exc:
+                logger.error("OpenAI TTS connection error for voice '%s': %s", voice, exc)
+                raise UpstreamServiceError("Narration voice service unavailable.") from exc
+        return response.content
+
+
 class DaydreamClient:
     def __init__(self) -> None:
         self.base_url = self._normalize_base_url(
@@ -393,16 +444,18 @@ class DaydreamClient:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
-    def _start_payload(self, audio_stream_url: str, prompt: str) -> dict[str, object]:
-        return {
+    def _start_payload(self, prompt: str) -> dict[str, object]:
+        payload: dict[str, object] = {
             "pipeline": os.getenv("DAYDREAM_PIPELINE", "streamdiffusion"),
             "params": {
                 "model_id": os.getenv("DAYDREAM_MODEL_ID", "stabilityai/sd-turbo"),
                 "prompt": prompt,
             },
             "name": os.getenv("DAYDREAM_STREAM_NAME", "LamiaLux stream"),
-            "output_rtmp_url": audio_stream_url,
         }
+        input_type = os.getenv("DAYDREAM_INPUT_TYPE", "whip").strip().lower()
+        payload["input_type"] = input_type
+        return payload
 
     def _start_endpoint(self) -> str:
         endpoint = os.getenv("DAYDREAM_CANVAS_STREAM_PATH", "/v1/streams")
@@ -428,27 +481,30 @@ class DaydreamClient:
             endpoint_template = "/v1/streams/{session_id}"
         return endpoint_template.format(session_id=session_id)
 
-    def _extract_stream_response(self, data: dict[str, object]) -> dict[str, str]:
+    def _extract_stream_session(self, data: dict[str, object]) -> StreamSession:
         session_id = str(data.get("id") or data.get("sessionId") or "")
+        whip_url = str(data.get("whip_url") or data.get("whipUrl") or "")
+        whep_url = str(data.get("whep_url") or data.get("whepUrl") or "")
         output_video_url = str(
-            data.get("output_stream_url")
-            or data.get("outputVideoUrl")
-            or data.get("whep_url")
-            or data.get("whip_url")
-            or ""
+            data.get("output_stream_url") or data.get("outputVideoUrl") or whep_url
         )
-        if not session_id or not output_video_url:
-            logger.error("Daydream response missing stream identifiers/output URL: %s", data)
-            raise UpstreamServiceError("Daydream returned incomplete stream data.")
-        return {"session_id": session_id, "output_video_url": output_video_url}
+        if not session_id or not whip_url:
+            logger.error("Daydream response missing session_id or whip_url: %s", data)
+            raise UpstreamServiceError("Daydream returned incomplete WHIP session data.")
+        return StreamSession(
+            session_id=session_id,
+            whip_url=whip_url,
+            whep_url=whep_url,
+            output_video_url=output_video_url,
+        )
 
-    def start_canvas_stream(self, audio_stream_url: str, prompt: str) -> dict[str, str]:
+    def create_livepeer_stream_session(self, prompt: str) -> StreamSession:
         if not self.base_url:
-            logger.error("DAYDREAM_BASE_URL missing while starting stream.")
+            logger.error("DAYDREAM_BASE_URL missing while starting stream session.")
             raise UpstreamServiceError("Daydream configuration is incomplete.")
 
         endpoint = self._start_endpoint()
-        payload = self._start_payload(audio_stream_url=audio_stream_url, prompt=prompt)
+        payload = self._start_payload(prompt=prompt)
 
         with httpx.Client(timeout=self.timeout) as client:
             try:
@@ -460,23 +516,33 @@ class DaydreamClient:
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
                 logger.error(
-                    "Daydream stream start failed with status %s at %s, payload=%s, error=%s",
+                    "Daydream stream session start failed with status %s at %s, "
+                    "payload=%s, error=%s",
                     exc.response.status_code,
                     endpoint,
                     payload,
                     exc,
                 )
-                raise UpstreamServiceError("Daydream failed to initialize the stream.") from exc
+                raise UpstreamServiceError(
+                    "Daydream failed to initialize the WHIP stream."
+                ) from exc
             except httpx.HTTPError as exc:
                 logger.error(
-                    "Daydream stream start connection error at %s with payload=%s: %s",
+                    "Daydream stream session connection error at %s with payload=%s: %s",
                     endpoint,
                     payload,
                     exc,
                 )
-                raise UpstreamServiceError("Daydream stream service unavailable.") from exc
+                raise UpstreamServiceError("Daydream WHIP stream service unavailable.") from exc
 
-        return self._extract_stream_response(response.json())
+        return self._extract_stream_session(response.json())
+
+    def start_canvas_stream(self, audio_stream_url: str, prompt: str) -> dict[str, str]:
+        stream_session = self.create_livepeer_stream_session(prompt=prompt)
+        return {
+            "session_id": stream_session.session_id,
+            "output_video_url": stream_session.output_video_url,
+        }
 
     def update_prompt(self, session_id: str, prompt: str) -> None:
         endpoint = self._update_endpoint(session_id=session_id)
