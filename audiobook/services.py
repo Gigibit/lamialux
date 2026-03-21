@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
@@ -7,6 +8,7 @@ import sqlite3
 from dataclasses import dataclass
 from html import unescape
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from urllib.parse import parse_qs, urljoin, urlparse
 
 import httpx
@@ -33,6 +35,13 @@ class NarrativeExperience:
     pdf_url: str
     chunks: list[NarrativeChunk]
     storage_path: str
+    cache_hit: bool = False
+
+
+@dataclass
+class CoquiTtsResult:
+    audio_path: str
+    mime_type: str
     cache_hit: bool = False
 
 
@@ -88,7 +97,6 @@ class WebResearchNarrativeClient:
             chunks=chunks,
             storage_path=str(self.sqlite_path),
         )
-
 
     def _load_cached_experience(self, query: str) -> NarrativeExperience | None:
         if not self.sqlite_path.exists():
@@ -313,9 +321,7 @@ class WebResearchNarrativeClient:
             connection.commit()
 
     def _ensure_chunks_table(self, connection: sqlite3.Connection) -> None:
-        table_columns = connection.execute(
-            "PRAGMA table_info(narrative_chunks)"
-        ).fetchall()
+        table_columns = connection.execute("PRAGMA table_info(narrative_chunks)").fetchall()
         if not table_columns:
             connection.execute(
                 """
@@ -462,3 +468,109 @@ class DaydreamClient:
                 raise UpstreamServiceError("Daydream is unavailable right now.") from exc
 
         return self._extract_stream_session(response.json())
+
+
+class CoquiTtsClient:
+    def __init__(self) -> None:
+        self.model_name = os.getenv("COQUI_MODEL_NAME", "tts_models/en/ljspeech/tacotron2-DDC")
+        self.cache_dir = Path(os.getenv("COQUI_CACHE_DIR", "storage/coqui_tts"))
+
+    def synthesize(self, *, session_id: str, chunk_index: int, text: str) -> CoquiTtsResult:
+        normalized_text = text.strip()
+        if not normalized_text:
+            logger.error(
+                "Coqui TTS requested without text. session_id=%s chunk_index=%s",
+                session_id,
+                chunk_index,
+            )
+            raise UpstreamServiceError("No text is available for Coqui TTS.")
+
+        cache_key = hashlib.sha256(
+            f"{self.model_name}|{session_id}|{chunk_index}|{normalized_text}".encode("utf-8")
+        ).hexdigest()
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        output_path = self.cache_dir / f"{cache_key}.wav"
+        if output_path.exists():
+            return CoquiTtsResult(
+                audio_path=str(output_path), mime_type="audio/wav", cache_hit=True
+            )
+
+        try:
+            from TTS.api import TTS
+        except ImportError as exc:
+            logger.error("Coqui TTS dependency is not installed: %s", exc)
+            raise UpstreamServiceError("Coqui TTS is not installed on the server.") from exc
+
+        try:
+            tts = TTS(model_name=self.model_name, progress_bar=False, gpu=False)
+            with NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+                tmp_path = Path(tmp_file.name)
+            try:
+                tts.tts_to_file(text=normalized_text, file_path=str(tmp_path))
+                output_path.write_bytes(tmp_path.read_bytes())
+            finally:
+                tmp_path.unlink(missing_ok=True)
+        except Exception as exc:
+            logger.error(
+                "Coqui TTS synthesis failed for session_id=%s chunk_index=%s model=%s: %s",
+                session_id,
+                chunk_index,
+                self.model_name,
+                exc,
+                exc_info=True,
+            )
+            raise UpstreamServiceError(
+                "Coqui TTS could not generate audio for this chunk."
+            ) from exc
+
+        return CoquiTtsResult(audio_path=str(output_path), mime_type="audio/wav", cache_hit=False)
+
+
+class PromptStreamUpdater:
+    def __init__(self) -> None:
+        self.base_url = os.getenv("DAYDREAM_BASE_URL", "https://api.daydream.live").rstrip("/")
+        self.api_key = os.getenv("DAYDREAM_API_KEY", "")
+        self.timeout = float(os.getenv("DAYDREAM_TIMEOUT_SECONDS", "30"))
+
+    def update_prompt(self, *, upstream_stream_id: str, prompt: str) -> None:
+        normalized_prompt = prompt.strip()
+        if not upstream_stream_id or not normalized_prompt:
+            logger.error(
+                (
+                    "Prompt stream update requested with missing data. "
+                    "upstream_stream_id=%s prompt_length=%s"
+                ),
+                upstream_stream_id,
+                len(normalized_prompt),
+            )
+            raise UpstreamServiceError("Prompt stream update requires a stream id and prompt.")
+
+        payload = {"params": {"prompt": normalized_prompt}}
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        with httpx.Client(timeout=self.timeout) as client:
+            try:
+                response = client.patch(
+                    f"{self.base_url}/v1/streams/{upstream_stream_id}",
+                    headers=headers,
+                    json=payload,
+                )
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                logger.error(
+                    "Prompt stream update failed with status %s for stream %s and prompt '%s': %s",
+                    exc.response.status_code,
+                    upstream_stream_id,
+                    normalized_prompt[:200],
+                    exc,
+                )
+                raise UpstreamServiceError("Unable to update the stream prompt.") from exc
+            except httpx.HTTPError as exc:
+                logger.error(
+                    "Prompt stream update connection error for stream %s: %s",
+                    upstream_stream_id,
+                    exc,
+                )
+                raise UpstreamServiceError("Prompt stream update is unavailable.") from exc
