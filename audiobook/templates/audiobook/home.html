@@ -57,7 +57,10 @@
           <div class="visualizer-stack">
             <div>
               <p class="eyebrow">Caos canvas</p>
-              <canvas id="theia-canvas" width="1280" height="720"></canvas>
+              <div class="canvas-shell">
+                <canvas id="theia-canvas" width="1280" height="720"></canvas>
+                <div id="theia-canvas-overlay" class="canvas-overlay" aria-live="polite"></div>
+              </div>
             </div>
           </div>
           <div class="console-actions">
@@ -100,6 +103,7 @@
         const connectButton = document.getElementById('connect-stream');
         const statusEl = document.getElementById('stream-status');
         const animationCanvas = document.getElementById('theia-canvas');
+        const animationOverlay = document.getElementById('theia-canvas-overlay');
         const video = document.getElementById('whep-player');
         const sessionLabel = document.getElementById('stream-session-label');
         const items = Array.from(document.querySelectorAll('.chunk-list li'));
@@ -117,7 +121,7 @@
           browserSessionInput.value = browserSessionId;
         }
 
-        if (!playButton || !stopButton || !connectButton || !statusEl || !animationCanvas || !video || !sessionLabel) {
+        if (!playButton || !stopButton || !connectButton || !statusEl || !animationCanvas || !animationOverlay || !video || !sessionLabel) {
           return;
         }
 
@@ -129,7 +133,6 @@
           whepUrl: '',
           outputVideoUrl: '',
         };
-        const animationContext = animationCanvas.getContext('2d');
         const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
         let publisherPc = null;
         let viewerPc = null;
@@ -151,29 +154,16 @@
         };
 
         const drawCanvas = (text) => {
-          animationContext.fillStyle = '#07111f';
-          animationContext.fillRect(0, 0, animationCanvas.width, animationCanvas.height);
-          animationContext.fillStyle = '#6ee7f9';
-          animationContext.font = 'bold 42px sans-serif';
-          animationContext.fillText('LamiaLux live PDF reading', 48, 72);
-          animationContext.fillStyle = '#d9e7ff';
-          animationContext.font = '28px sans-serif';
-          const words = text.split(' ');
-          let line = '';
-          let y = 140;
-          words.forEach((word) => {
-            const testLine = `${line}${word} `;
-            if (animationContext.measureText(testLine).width > animationCanvas.width - 96) {
-              animationContext.fillText(line, 48, y);
-              line = `${word} `;
-              y += 38;
-            } else {
-              line = testLine;
-            }
-          });
-          if (line) {
-            animationContext.fillText(line, 48, y);
+          if (!animationOverlay) {
+            logger.error('Unable to update the Theia canvas overlay because the overlay element is missing.');
+            return;
           }
+          animationOverlay.innerHTML = '';
+          const title = document.createElement('strong');
+          title.textContent = 'LamiaLux live PDF reading';
+          const body = document.createElement('span');
+          body.textContent = text;
+          animationOverlay.append(title, body);
         };
 
         const validateStreamSession = () => {

@@ -30,6 +30,7 @@ class HomeViewTests(TestCase):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'id="theia-canvas"')
+        self.assertContains(response, 'id="theia-canvas-overlay"')
         self.assertNotContains(response, 'id="narration-canvas"')
         self.assertContains(response, 'Canvas preview')
         self.assertContains(response, 'Canvas ready. Search and prepare a stream')
@@ -78,6 +79,7 @@ class HomeViewTests(TestCase):
         self.assertContains(response, "Open downloaded PDF source")
         self.assertContains(response, "Fear is the mind killer")
         self.assertContains(response, 'id="theia-canvas"')
+        self.assertContains(response, 'id="theia-canvas-overlay"')
         self.assertNotContains(response, 'id="narration-canvas"')
         self.assertContains(response, "const hasPreparedStream = true;")
         self.assertContains(response, 'name="browser_session_id" id="browser-session-id"')
@@ -96,6 +98,10 @@ class HomeViewTests(TestCase):
         self.assertContains(
             response,
             "Missing Livepeer session metadata required for WHIP publishing.",
+        )
+        self.assertContains(
+            response,
+            "Unable to update the Theia canvas overlay because the overlay element is missing.",
         )
         self.assertNotContains(
             response,
