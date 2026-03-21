@@ -377,7 +377,8 @@
           const offer = await publisherPc.createOffer();
           await publisherPc.setLocalDescription(offer);
           await waitForIceGatheringComplete(publisherPc);
-          const response = await fetch(streamSession.whipUrl || `${window.location.origin}/streams/${streamSession.sessionId}/whip`, {
+          const whipUrl = streamSession.whipUrl || `${window.location.origin}/streams/${streamSession.sessionId}/whip`;
+          const response = await fetch(whipUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/sdp' },
             body: publisherPc.localDescription.sdp,
@@ -386,11 +387,16 @@
             const responseSummary = await summarizeResponse(response);
             console.error('WHIP publish request returned a non-2xx response.', {
               sessionId: streamSession.sessionId,
-              whipUrl: streamSession.whipUrl || `${window.location.origin}/streams/${streamSession.sessionId}/whip`,
+              whipUrl,
               localDescriptionLength: publisherPc.localDescription?.sdp?.length || 0,
               response: responseSummary,
             });
             throw new Error(`WHIP connection failed with status ${responseSummary.status}`);
+          }
+          const playbackHeader = response.headers.get('livepeer-playback-url');
+          if (playbackHeader) {
+            streamSession.whepUrl = playbackHeader
+              .replace('fra-ai-prod-livepeer-ai-gateway-0.livepeer.com', 'ai.livepeer.com');
           }
           await publisherPc.setRemoteDescription({ type: 'answer', sdp: await response.text() });
           await refreshStreamSessionAfterWhip();
