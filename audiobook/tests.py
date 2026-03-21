@@ -3,7 +3,12 @@ from unittest.mock import patch
 
 from django.test import Client, TestCase, override_settings
 
-from audiobook.services import NarrativeChunk, UpstreamServiceError, WebResearchNarrativeClient
+from audiobook.services import (
+    DaydreamClient,
+    NarrativeChunk,
+    UpstreamServiceError,
+    WebResearchNarrativeClient,
+)
 
 
 class HomeViewTests(TestCase):
@@ -197,6 +202,87 @@ class WebResearchSearchTests(TestCase):
             client._normalize_pdf_url(
                 "//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Farticle.html&amp;rut=abc"
             )
+        )
+
+
+class DaydreamClientTests(TestCase):
+    def test_start_canvas_stream_uses_v1_endpoint_and_payload(self) -> None:
+        client = DaydreamClient()
+
+        class DummyResponse:
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> dict[str, str]:
+                return {"id": "stream-123", "output_stream_url": "https://video.example/stream"}
+
+        class DummyHttpClient:
+            def __init__(self, *args, **kwargs) -> None:
+                self.post_calls: list[tuple[str, dict[str, str], dict[str, object]]] = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+            def post(self, url, headers, json):
+                self.post_calls.append((url, headers, json))
+                self.last_call = (url, headers, json)
+                return DummyResponse()
+
+        dummy_http_client = DummyHttpClient()
+        with patch("audiobook.services.httpx.Client", return_value=dummy_http_client):
+            stream = client.start_canvas_stream(
+                audio_stream_url="https://audio.example/live",
+                prompt="Dreamy skyline",
+            )
+
+        self.assertEqual(stream["session_id"], "stream-123")
+        self.assertEqual(stream["output_video_url"], "https://video.example/stream")
+        self.assertEqual(dummy_http_client.last_call[0], "https://api.daydream.live/v1/streams")
+        self.assertEqual(
+            dummy_http_client.last_call[2],
+            {
+                "pipeline": "streamdiffusion",
+                "params": {
+                    "model_id": "stabilityai/sd-turbo",
+                    "prompt": "Dreamy skyline",
+                },
+                "name": "LamiaLux stream",
+                "output_rtmp_url": "https://audio.example/live",
+            },
+        )
+
+    def test_update_prompt_uses_v1_endpoint_and_payload(self) -> None:
+        client = DaydreamClient()
+
+        class DummyResponse:
+            def raise_for_status(self) -> None:
+                return None
+
+        class DummyHttpClient:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+            def patch(self, url, headers, json):
+                self.last_call = (url, headers, json)
+                return DummyResponse()
+
+        dummy_http_client = DummyHttpClient()
+        with patch("audiobook.services.httpx.Client", return_value=dummy_http_client):
+            client.update_prompt(session_id="stream-123", prompt="Neon rain")
+
+        self.assertEqual(dummy_http_client.last_call[0], "https://api.daydream.live/v1/streams/stream-123")
+        self.assertEqual(
+            dummy_http_client.last_call[2],
+            {
+                "pipeline": "streamdiffusion",
+                "params": {"prompt": "Neon rain"},
+            },
         )
 
 
