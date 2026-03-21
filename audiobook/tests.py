@@ -7,6 +7,12 @@ from audiobook.services import NarrativeChunk, UpstreamServiceError, WebResearch
 
 
 class HomeViewTests(TestCase):
+    def test_static_stylesheet_serves_css_content_type(self) -> None:
+        response = self.client.get("/static/audiobook/style.css")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"].split(";")[0], "text/css")
+
     def setUp(self) -> None:
         self.client = Client()
 
