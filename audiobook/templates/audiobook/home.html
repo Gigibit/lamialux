@@ -195,6 +195,16 @@
           };
         };
 
+        const logPeerConnectionState = (label, peerConnection, extra = {}) => {
+          console.info(`${label} peer connection state changed.`, {
+            connectionState: peerConnection.connectionState,
+            iceConnectionState: peerConnection.iceConnectionState,
+            iceGatheringState: peerConnection.iceGatheringState,
+            signalingState: peerConnection.signalingState,
+            ...extra,
+          });
+        };
+
         const ensureStreamMatch = async () => {
           if (streamSession.whipUrl && streamSession.whepUrl) {
             return streamSession;
@@ -357,7 +367,11 @@
           }
           publisherPc = new RTCPeerConnection(rtcConfig);
           publisherPc.onconnectionstatechange = () => {
+            logPeerConnectionState('WHIP publisher', publisherPc, { sessionId: streamSession.sessionId });
             setStatus(`WHIP publishing connection: ${publisherPc.connectionState}.`);
+          };
+          publisherPc.oniceconnectionstatechange = () => {
+            logPeerConnectionState('WHIP publisher ICE', publisherPc, { sessionId: streamSession.sessionId });
           };
           stream.getTracks().forEach((track) => publisherPc.addTrack(track, stream));
           const offer = await publisherPc.createOffer();
@@ -393,6 +407,12 @@
           viewerPc.addTransceiver('video', { direction: 'recvonly' });
           viewerPc.addTransceiver('audio', { direction: 'recvonly' });
           viewerPc.onicecandidate = handleViewerIceCandidate;
+          viewerPc.onconnectionstatechange = () => {
+            logPeerConnectionState('WHEP viewer', viewerPc, { sessionId: streamSession.sessionId, whepResourceUrl });
+          };
+          viewerPc.oniceconnectionstatechange = () => {
+            logPeerConnectionState('WHEP viewer ICE', viewerPc, { sessionId: streamSession.sessionId, whepResourceUrl });
+          };
           viewerPc.ontrack = (event) => {
             video.srcObject = event.streams[0];
           };
