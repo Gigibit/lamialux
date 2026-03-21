@@ -236,18 +236,7 @@ class WebResearchNarrativeClient:
     def _store_chunks(self, query: str, pdf_url: str, chunks: list[NarrativeChunk]) -> None:
         self.sqlite_path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.sqlite_path) as connection:
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS narrative_chunks (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    query TEXT NOT NULL,
-                    pdf_url TEXT NOT NULL,
-                    chapter_title TEXT NOT NULL,
-                    chunk_index INTEGER NOT NULL,
-                    text TEXT NOT NULL
-                )
-                """
-            )
+            self._ensure_chunks_table(connection)
             connection.execute("DELETE FROM narrative_chunks WHERE query = ?", (query,))
             connection.executemany(
                 """
@@ -268,6 +257,62 @@ class WebResearchNarrativeClient:
                 ],
             )
             connection.commit()
+
+    def _ensure_chunks_table(self, connection: sqlite3.Connection) -> None:
+        table_columns = connection.execute(
+            "PRAGMA table_info(narrative_chunks)"
+        ).fetchall()
+        if not table_columns:
+            connection.execute(
+                """
+                CREATE TABLE narrative_chunks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    query TEXT NOT NULL,
+                    pdf_url TEXT NOT NULL,
+                    chapter_title TEXT NOT NULL,
+                    chunk_index INTEGER NOT NULL,
+                    text TEXT NOT NULL
+                )
+                """
+            )
+            return
+
+        column_names = {column[1] for column in table_columns}
+        prompt_column = next((column for column in table_columns if column[1] == "prompt"), None)
+        expected_columns = {"id", "query", "pdf_url", "chapter_title", "chunk_index", "text"}
+
+        if prompt_column is not None and prompt_column[3]:
+            logger.error(
+                "Migrating legacy narrative_chunks table at %s to remove "
+                "NOT NULL prompt dependency.",
+                self.sqlite_path,
+            )
+            connection.executescript(
+                """
+                ALTER TABLE narrative_chunks RENAME TO narrative_chunks_legacy;
+                CREATE TABLE narrative_chunks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    query TEXT NOT NULL,
+                    pdf_url TEXT NOT NULL,
+                    chapter_title TEXT NOT NULL,
+                    chunk_index INTEGER NOT NULL,
+                    text TEXT NOT NULL
+                );
+                INSERT INTO narrative_chunks (id, query, pdf_url, chapter_title, chunk_index, text)
+                SELECT id, query, pdf_url, chapter_title, chunk_index, text
+                FROM narrative_chunks_legacy;
+                DROP TABLE narrative_chunks_legacy;
+                """
+            )
+            return
+
+        if not expected_columns.issubset(column_names):
+            logger.error(
+                "narrative_chunks table at %s has unsupported schema columns=%s.",
+                self.sqlite_path,
+                sorted(column_names),
+            )
+            raise UpstreamServiceError("Stored narrative chunk cache has an unsupported schema.")
 
 
 class DaydreamClient:
