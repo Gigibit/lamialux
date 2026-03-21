@@ -35,7 +35,7 @@ class HomeViewTests(TestCase):
         self.assertContains(response, 'id="theia-canvas-overlay"')
         self.assertNotContains(response, 'id="narration-canvas"')
         self.assertContains(response, "Canvas preview")
-        self.assertContains(response, "Canvas ready. Search and prepare a stream")
+        self.assertContains(response, "Canvas ready. Search and prepare a narrative source")
         self.assertContains(response, 'id="connect-stream" disabled')
         self.assertContains(response, "const hasPreparedStream = false;")
         self.assertContains(response, 'id="coqui-player"')
