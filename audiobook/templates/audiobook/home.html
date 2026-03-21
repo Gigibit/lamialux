@@ -40,40 +40,42 @@
       {% if message %}<p class="message">{{ message }}</p>{% endif %}
       {% if error %}<p class="error">{{ error }}</p>{% endif %}
 
-      {% if stream %}
-        <section class="stream-layout">
-          <article class="panel">
-            <div class="section-heading">
-              <div>
-                <p class="eyebrow">Live output</p>
-                <h2>{{ stream.title }}</h2>
-              </div>
-              <p class="small" id="stream-session-label">Session not matched yet.</p>
+      <section class="stream-layout">
+        <article class="panel">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Live output</p>
+              <h2>{% if stream %}{{ stream.title }}{% else %}Canvas preview{% endif %}</h2>
             </div>
-            <p class="small">{{ stream.author }}</p>
+            <p class="small" id="stream-session-label">{% if stream %}Session not matched yet.{% else %}Search a PDF to bind this canvas to a stream session.{% endif %}</p>
+          </div>
+          <p class="small">{% if stream %}{{ stream.author }}{% else %}The visible canvas is always mounted so the animation surface is available before streaming starts.{% endif %}</p>
+          {% if stream %}
             <p class="small"><a href="{{ stream.pdf_url }}" target="_blank" rel="noreferrer">Open downloaded PDF source</a></p>
-            <video id="whep-player" controls autoplay playsinline muted></video>
-            <div class="visualizer-stack">
-              <div>
-                <p class="eyebrow">Caos canvas</p>
-                <canvas id="theia-canvas" width="1280" height="720"></canvas>
-              </div>
+          {% endif %}
+          <video id="whep-player" controls autoplay playsinline muted></video>
+          <div class="visualizer-stack">
+            <div>
+              <p class="eyebrow">Caos canvas</p>
+              <canvas id="theia-canvas" width="1280" height="720"></canvas>
             </div>
-            <canvas id="narration-canvas" class="publisher-canvas" width="1280" height="720" aria-hidden="true"></canvas>
-            <div class="console-actions">
-              <button type="button" id="connect-stream">Connect WHIP/WHEP</button>
-              <button type="button" id="play-tts">Read book</button>
-              <button type="button" id="stop-tts" class="secondary">Stop</button>
-            </div>
-            <p id="stream-status" class="small">Idle.</p>
-            <p class="small note">
-              Browser speech synthesis plays locally. Because browsers do not reliably expose native TTS as a capturable
-              audio track, WHIP receives the illustrated canvas plus a Web Audio narration bed so the stream remains valid.
-            </p>
-          </article>
+          </div>
+          <canvas id="narration-canvas" class="publisher-canvas" width="1280" height="720" aria-hidden="true"></canvas>
+          <div class="console-actions">
+            <button type="button" id="connect-stream" {% if not stream %}disabled{% endif %}>Connect WHIP/WHEP</button>
+            <button type="button" id="play-tts" {% if not stream %}disabled{% endif %}>Read book</button>
+            <button type="button" id="stop-tts" class="secondary">Stop</button>
+          </div>
+          <p id="stream-status" class="small">{% if stream %}Idle.{% else %}Canvas ready. Search and prepare a stream to enable WHIP/WHEP and TTS controls.{% endif %}</p>
+          <p class="small note">
+            Browser speech synthesis plays locally. Because browsers do not reliably expose native TTS as a capturable
+            audio track, WHIP receives the illustrated canvas plus a Web Audio narration bed so the stream remains valid.
+          </p>
+        </article>
 
-          <aside class="panel chunk-list">
-            <p class="eyebrow">Book chunks</p>
+        <aside class="panel chunk-list">
+          <p class="eyebrow">Book chunks</p>
+          {% if stream %}
             <p class="small">Stored in {{ stream.storage_path }}</p>
             <ol>
               {% for chunk in stream.chunks %}
@@ -83,9 +85,11 @@
                 </li>
               {% endfor %}
             </ol>
-          </aside>
-        </section>
-      {% endif %}
+          {% else %}
+            <p class="small">No PDF prepared yet. Submit a query to load chunks for browser TTS and stream publishing.</p>
+          {% endif %}
+        </aside>
+      </section>
     </main>
 
     <script>
@@ -100,6 +104,7 @@
         const video = document.getElementById('whep-player');
         const sessionLabel = document.getElementById('stream-session-label');
         const items = Array.from(document.querySelectorAll('.chunk-list li'));
+        const hasPreparedStream = {{ stream|yesno:'true,false' }};
 
         const createBrowserSessionId = () => ((window.crypto && typeof window.crypto.randomUUID === 'function')
           ? window.crypto.randomUUID()
@@ -113,7 +118,7 @@
           browserSessionInput.value = browserSessionId;
         }
 
-        if (!playButton || !stopButton || !connectButton || !statusEl || !canvas || !animationCanvas || !video || !sessionLabel || !items.length) {
+        if (!playButton || !stopButton || !connectButton || !statusEl || !canvas || !animationCanvas || !video || !sessionLabel) {
           return;
         }
 
@@ -232,6 +237,8 @@
           streamSession.whepUrl = matchedStreamSession.whepUrl || matchedStreamSession.whep_url || '';
           streamSession.outputVideoUrl = matchedStreamSession.outputVideoUrl || matchedStreamSession.output_video_url || '';
           sessionLabel.textContent = `Session ${streamSession.sessionId}`;
+          connectButton.disabled = false;
+          playButton.disabled = false;
           return streamSession;
         };
 
@@ -546,6 +553,12 @@
         };
 
         playButton.addEventListener('click', async () => {
+          if (!items.length) {
+            console.error('Read book requested without prepared chunks.', { hasPreparedStream, sessionId: streamSession.sessionId });
+            setStatus('No book chunks are available yet. Search and prepare a PDF first.');
+            return;
+          }
+
           cancelled = false;
           await waitForSpeechReady();
           if (audioContext && audioContext.state === 'suspended') {
@@ -578,8 +591,15 @@
           }
         });
 
-        connectButton.addEventListener('click', connectStream);
-        drawCanvas('Ready to read the downloaded PDF.');
+        connectButton.addEventListener('click', () => {
+          if (!hasPreparedStream) {
+            console.error('Connect stream requested before a stream was prepared.', { sessionId: streamSession.sessionId });
+            setStatus('Search and prepare a PDF before connecting WHIP/WHEP.');
+            return;
+          }
+          connectStream();
+        });
+        drawCanvas(hasPreparedStream ? 'Ready to read the downloaded PDF.' : 'Canvas ready. Search and prepare a PDF to start streaming.');
       })();
     </script>
     <script src="{% static 'audiobook/caos.js' %}"></script>

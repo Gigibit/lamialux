@@ -29,6 +29,11 @@ class HomeViewTests(TestCase):
     def test_home_renders(self) -> None:
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'id="theia-canvas"')
+        self.assertContains(response, 'Canvas preview')
+        self.assertContains(response, 'Canvas ready. Search and prepare a stream')
+        self.assertContains(response, 'id="connect-stream" disabled')
+        self.assertContains(response, "const hasPreparedStream = false;")
 
     @patch("audiobook.views.DaydreamClient.create_livepeer_stream_session")
     @patch("audiobook.views.WebResearchNarrativeClient.build_experience")
@@ -72,6 +77,7 @@ class HomeViewTests(TestCase):
         self.assertContains(response, "Open downloaded PDF source")
         self.assertContains(response, "Fear is the mind killer")
         self.assertContains(response, 'id="theia-canvas"')
+        self.assertContains(response, "const hasPreparedStream = true;")
         self.assertContains(response, 'name="browser_session_id" id="browser-session-id"')
         self.assertContains(
             response,
