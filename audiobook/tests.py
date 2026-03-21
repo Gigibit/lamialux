@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -29,9 +30,8 @@ class HomeViewTests(TestCase):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
 
-    @patch("audiobook.views.DaydreamClient.create_livepeer_stream_session")
     @patch("audiobook.views.WebResearchNarrativeClient.build_experience")
-    def test_start_stream_success(self, build_experience, start_stream) -> None:
+    def test_start_stream_success(self, build_experience) -> None:
         build_experience.return_value = type(
             "Experience",
             (),
@@ -49,27 +49,18 @@ class HomeViewTests(TestCase):
                 ],
             },
         )()
-        start_stream.return_value = StreamSession(
-            session_id="abc",
-            whip_url="https://upstream.example/whip",
-            whep_url="https://upstream.example/whep",
-            output_video_url="https://upstream.example/whep",
-        )
-
         response = self.client.post("/", {"book_query": "Dune", "daydream_prompt": "desert storm"})
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "PDF found, downloaded, chunked")
+        self.assertContains(response, "Session not matched yet.")
         self.assertContains(response, "Open downloaded PDF source")
         self.assertContains(response, "Fear is the mind killer")
         self.assertContains(response, 'id="theia-canvas"')
         self.assertContains(
             response,
-            'https://raw.githubusercontent.com/Gigibit/ingoya/refs/heads/theia/public/caos.js',
+            "https://raw.githubusercontent.com/Gigibit/ingoya/refs/heads/theia/public/caos.js",
         )
-        self.assertContains(response, '"sessionId": "abc"')
-        self.assertContains(response, '"whipUrl": "http://testserver/streams/abc/whip"')
-        self.assertContains(response, '"whepUrl": "http://testserver/streams/abc/whep"')
 
     @patch(
         "audiobook.views.WebResearchNarrativeClient.build_experience",
@@ -88,7 +79,6 @@ class HomeViewTests(TestCase):
             "Please provide both a book query and a prompt",
             status_code=400,
         )
-
 
     @patch("audiobook.views.httpx.Client")
     def test_whep_proxy_returns_502_when_upstream_times_out(self, http_client) -> None:
@@ -119,6 +109,41 @@ class HomeViewTests(TestCase):
 
         self.assertEqual(response.status_code, 502)
         self.assertContains(response, "WHEP upstream unavailable.", status_code=502)
+
+    def test_stream_match_returns_aliased_existing_stream_for_browser_uuid(self) -> None:
+        STREAM_SESSIONS["upstream-abc"] = StreamSession(
+            session_id="upstream-abc",
+            whip_url="https://upstream.example/whip",
+            whep_url="https://upstream.example/whep",
+            output_video_url="https://upstream.example/whep",
+        )
+
+        response = self.client.post(
+            "/streams/match",
+            data=json.dumps({"sessionId": "browser-uuid"}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertJSONEqual(
+            response.content,
+            {
+                "sessionId": "browser-uuid",
+                "whipUrl": "http://testserver/streams/browser-uuid/whip",
+                "whepUrl": "http://testserver/streams/browser-uuid/whep",
+                "outputVideoUrl": "https://upstream.example/whep",
+            },
+        )
+
+    def test_stream_match_returns_404_without_existing_streams(self) -> None:
+        response = self.client.post(
+            "/streams/match",
+            data=json.dumps({"sessionId": "browser-uuid"}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertJSONEqual(response.content, {"error": "No stream match found."})
 
 
 class WebResearchNarrativeClientTests(TestCase):
@@ -195,13 +220,15 @@ class WebResearchNarrativeClientTests(TestCase):
         self.assertNotIn("prompt", [column[1] for column in columns])
         self.assertEqual(
             rows,
-            [(
-                "dune",
-                "http://example.com/dune.pdf",
-                "Chapter 1",
-                1,
-                "Fear is the mind killer.",
-            )],
+            [
+                (
+                    "dune",
+                    "http://example.com/dune.pdf",
+                    "Chapter 1",
+                    1,
+                    "Fear is the mind killer.",
+                )
+            ],
         )
 
 
@@ -282,7 +309,11 @@ class DaydreamClientTests(TestCase):
                 return None
 
             def json(self) -> dict[str, str]:
-                return {"id": "stream-123", "whip_url": "https://video.example/whip", "whep_url": "https://video.example/stream"}
+                return {
+                    "id": "stream-123",
+                    "whip_url": "https://video.example/whip",
+                    "whep_url": "https://video.example/stream",
+                }
 
         class DummyHttpClient:
             def __init__(self, *args, **kwargs) -> None:
