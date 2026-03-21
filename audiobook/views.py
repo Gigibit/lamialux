@@ -21,6 +21,30 @@ STREAM_SESSIONS: dict[str, StreamSession] = {}
 WHEP_PROXY_TIMEOUT = httpx.Timeout(connect=5.0, read=5.0, write=30.0, pool=5.0)
 
 
+def _request_debug_context(request: HttpRequest) -> dict[str, object]:
+    return {
+        "path": request.path,
+        "content_type": request.headers.get("Content-Type"),
+        "content_length": request.headers.get("Content-Length"),
+        "user_agent": request.headers.get("User-Agent"),
+        "remote_addr": request.META.get("REMOTE_ADDR"),
+        "forwarded_for": request.headers.get("X-Forwarded-For"),
+    }
+
+
+def _upstream_debug_context(upstream: httpx.Response) -> dict[str, object]:
+    return {
+        "status": upstream.status_code,
+        "content_type": upstream.headers.get("content-type"),
+        "location": upstream.headers.get("location"),
+        "livepeer_playback_url": (
+            upstream.headers.get("livepeer-playback-url")
+            or upstream.headers.get("Livepeer-Playback-Url")
+        ),
+        "body_preview": upstream.text[:500],
+    }
+
+
 def home(request: HttpRequest) -> HttpResponse:
     context: dict[str, object] = {
         "book_form": BookRequestForm(),
@@ -112,6 +136,13 @@ def whip_proxy(request: HttpRequest, session_id: str) -> HttpResponse:
         logger.error("Returning non-2xx response for missing WHIP session: status=404")
         return HttpResponse("WHIP session not found.", status=404)
 
+    request_context = _request_debug_context(request)
+    logger.info(
+        "Forwarding WHIP request for session %s with context=%s",
+        session_id,
+        request_context,
+    )
+
     try:
         with httpx.Client(timeout=30) as client:
             upstream = client.post(
@@ -120,9 +151,22 @@ def whip_proxy(request: HttpRequest, session_id: str) -> HttpResponse:
                 content=request.body,
             )
     except httpx.HTTPError as exc:
-        logger.error("WHIP proxy failed for session '%s': %s", session_id, exc, exc_info=True)
+        logger.error(
+            "WHIP proxy failed for session '%s': %s. request_context=%s upstream_url=%s",
+            session_id,
+            exc,
+            request_context,
+            stream.whip_url,
+            exc_info=True,
+        )
         logger.error("Returning non-2xx response for WHIP upstream failure: status=502")
         return HttpResponse("WHIP upstream unavailable.", status=502)
+
+    logger.info(
+        "WHIP upstream responded for session %s with details=%s",
+        session_id,
+        _upstream_debug_context(upstream),
+    )
 
     response = HttpResponse(
         upstream.text,
@@ -134,7 +178,7 @@ def whip_proxy(request: HttpRequest, session_id: str) -> HttpResponse:
             "WHIP upstream returned non-2xx for session '%s': status=%s body=%s",
             session_id,
             upstream.status_code,
-            upstream.text,
+            upstream.text[:500],
         )
         logger.error(
             "Returning non-2xx response for WHIP upstream status passthrough: status=%s",
@@ -217,6 +261,16 @@ def whep_resource_proxy(request: HttpRequest, session_id: str) -> HttpResponse:
 
 def _proxy_whep_request(request: HttpRequest, session_id: str, method: str) -> HttpResponse:
     stream = STREAM_SESSIONS[session_id]
+    request_context = _request_debug_context(request)
+    logger.info(
+        "Forwarding WHEP request for session %s using method %s "
+        "with request_context=%s upstream_url=%s",
+        session_id,
+        method,
+        request_context,
+        stream.whep_url,
+    )
+
     try:
         with httpx.Client(timeout=WHEP_PROXY_TIMEOUT) as client:
             upstream = client.request(
@@ -232,14 +286,25 @@ def _proxy_whep_request(request: HttpRequest, session_id: str, method: str) -> H
             )
     except httpx.HTTPError as exc:
         logger.error(
-            "WHEP proxy failed for session '%s' using method %s: %s",
+            "WHEP proxy failed for session '%s' using method %s: %s. "
+            "request_context=%s upstream_url=%s timeout=%s",
             session_id,
             method,
             exc,
+            request_context,
+            stream.whep_url,
+            WHEP_PROXY_TIMEOUT,
             exc_info=True,
         )
         logger.error("Returning non-2xx response for WHEP upstream failure: status=502")
         return HttpResponse("WHEP upstream unavailable.", status=502)
+
+    logger.info(
+        "WHEP upstream responded for session %s using method %s with details=%s",
+        session_id,
+        method,
+        _upstream_debug_context(upstream),
+    )
 
     response = HttpResponse(
         upstream.text,
@@ -252,7 +317,7 @@ def _proxy_whep_request(request: HttpRequest, session_id: str, method: str) -> H
             session_id,
             method,
             upstream.status_code,
-            upstream.text,
+            upstream.text[:500],
         )
         logger.error(
             "Returning non-2xx response for WHEP upstream status passthrough: status=%s",

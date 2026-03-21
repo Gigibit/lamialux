@@ -183,6 +183,28 @@
 
         const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
+        const summarizeResponse = async (response) => {
+          const body = await response.text();
+          return {
+            status: response.status,
+            statusText: response.statusText,
+            url: response.url,
+            location: response.headers.get('location'),
+            livepeerPlaybackUrl: response.headers.get('livepeer-playback-url'),
+            bodyPreview: body.slice(0, 500),
+          };
+        };
+
+        const logPeerConnectionState = (label, peerConnection, extra = {}) => {
+          console.info(`${label} peer connection state changed.`, {
+            connectionState: peerConnection.connectionState,
+            iceConnectionState: peerConnection.iceConnectionState,
+            iceGatheringState: peerConnection.iceGatheringState,
+            signalingState: peerConnection.signalingState,
+            ...extra,
+          });
+        };
+
         const ensureStreamMatch = async () => {
           if (streamSession.whipUrl && streamSession.whepUrl) {
             return streamSession;
@@ -316,7 +338,12 @@
               body: sdpFragment,
             });
           } catch (error) {
-            console.warn('Unable to PATCH WHEP ICE candidate to the proxy resource.', error);
+            console.warn('Unable to PATCH WHEP ICE candidate to the proxy resource.', {
+              error,
+              sessionId: streamSession.sessionId,
+              whepResourceUrl,
+              candidate,
+            });
           }
         };
 
@@ -340,7 +367,11 @@
           }
           publisherPc = new RTCPeerConnection(rtcConfig);
           publisherPc.onconnectionstatechange = () => {
+            logPeerConnectionState('WHIP publisher', publisherPc, { sessionId: streamSession.sessionId });
             setStatus(`WHIP publishing connection: ${publisherPc.connectionState}.`);
+          };
+          publisherPc.oniceconnectionstatechange = () => {
+            logPeerConnectionState('WHIP publisher ICE', publisherPc, { sessionId: streamSession.sessionId });
           };
           stream.getTracks().forEach((track) => publisherPc.addTrack(track, stream));
           const offer = await publisherPc.createOffer();
@@ -352,11 +383,14 @@
             body: publisherPc.localDescription.sdp,
           });
           if (!response.ok) {
+            const responseSummary = await summarizeResponse(response);
             console.error('WHIP publish request returned a non-2xx response.', {
               sessionId: streamSession.sessionId,
-              status: response.status,
+              whipUrl: streamSession.whipUrl || `${window.location.origin}/streams/${streamSession.sessionId}/whip`,
+              localDescriptionLength: publisherPc.localDescription?.sdp?.length || 0,
+              response: responseSummary,
             });
-            throw new Error(`WHIP connection failed with status ${response.status}`);
+            throw new Error(`WHIP connection failed with status ${responseSummary.status}`);
           }
           await publisherPc.setRemoteDescription({ type: 'answer', sdp: await response.text() });
           await refreshStreamSessionAfterWhip();
@@ -367,6 +401,12 @@
           viewerPc.addTransceiver('video', { direction: 'recvonly' });
           viewerPc.addTransceiver('audio', { direction: 'recvonly' });
           viewerPc.onicecandidate = handleViewerIceCandidate;
+          viewerPc.onconnectionstatechange = () => {
+            logPeerConnectionState('WHEP viewer', viewerPc, { sessionId: streamSession.sessionId, whepResourceUrl });
+          };
+          viewerPc.oniceconnectionstatechange = () => {
+            logPeerConnectionState('WHEP viewer ICE', viewerPc, { sessionId: streamSession.sessionId, whepResourceUrl });
+          };
           viewerPc.ontrack = (event) => {
             video.srcObject = event.streams[0];
           };
@@ -378,7 +418,11 @@
             try {
               await fetch(whepResourceUrl, { method: 'DELETE' });
             } catch (error) {
-              console.warn('Unable to DELETE WHEP resource during cleanup.', error);
+              console.warn('Unable to DELETE WHEP resource during cleanup.', {
+                error,
+                whepResourceUrl,
+                sessionId: streamSession.sessionId,
+              });
             }
           }
           whepResourceUrl = null;
@@ -403,7 +447,8 @@
             const offer = await peerConnection.createOffer();
             await peerConnection.setLocalDescription(offer);
             await waitForIceGatheringComplete(peerConnection);
-            const response = await fetch(streamSession.whepUrl || `${window.location.origin}/streams/${streamSession.sessionId}/whep`, {
+            const whepUrl = streamSession.whepUrl || `${window.location.origin}/streams/${streamSession.sessionId}/whep`;
+            const response = await fetch(whepUrl, {
               method: 'POST',
               headers: { 'Content-Type': 'application/sdp' },
               body: peerConnection.localDescription.sdp,
@@ -417,12 +462,15 @@
               return;
             }
 
-            lastError = new Error(`WHEP connection failed with status ${response.status}`);
+            const responseSummary = await summarizeResponse(response);
+            lastError = new Error(`WHEP connection failed with status ${responseSummary.status}`);
             console.error('WHEP playback request returned a non-2xx response; retrying with backoff.', {
               attempt,
-              status: response.status,
               pollIntervalMs,
               sessionId: streamSession.sessionId,
+              whepUrl,
+              localDescriptionLength: peerConnection.localDescription?.sdp?.length || 0,
+              response: responseSummary,
             });
             setStatus(`WHIP connected. Waiting for WHEP (attempt ${attempt}, retry in ${Math.round(pollIntervalMs / 1000)}s)...`);
             await sleep(pollIntervalMs);
