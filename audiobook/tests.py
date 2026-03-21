@@ -9,6 +9,8 @@ from audiobook.services import (
     DaydreamClient,
     MusicSearchClient,
     NarrativeChunk,
+    NarrativeClientFactory,
+    OpenAiSearchNarrativeClient,
     StreamSession,
     UpstreamServiceError,
     WebResearchNarrativeClient,
@@ -84,6 +86,9 @@ class HomeViewTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "PDF found, downloaded, chunked")
+        self.assertContains(response, "Narrative source found, media prepared")
+        self.assertContains(response, "Session not matched yet.")
+        self.assertNotContains(response, "Open downloaded PDF source")
         self.assertContains(response, "Fear is the mind killer")
         self.assertContains(response, 'data-page="book"')
         self.assertContains(response, "window.lamialuxPageConfig")
@@ -201,14 +206,14 @@ class HomeViewTests(TestCase):
 
     @patch("audiobook.views.CoquiTtsClient.synthesize")
     @patch("audiobook.views.DaydreamClient.create_livepeer_stream_session")
-    @patch("audiobook.views.WebResearchNarrativeClient.build_experience")
+    @patch("audiobook.views.NarrativeClientFactory.create")
     def test_coqui_tts_serves_generated_audio(
         self,
-        build_experience,
+        create_narrative_client,
         create_livepeer_stream_session,
         synthesize,
     ) -> None:
-        build_experience.return_value = type(
+        create_narrative_client.return_value.build_experience.return_value = type(
             "Experience",
             (),
             {
@@ -260,6 +265,61 @@ class HomeViewTests(TestCase):
         synthesize.assert_called_once()
         audio_path.unlink(missing_ok=True)
 
+    @patch("audiobook.views.NarrativeClientFactory.create")
+    @patch("audiobook.views.DaydreamClient.create_livepeer_stream_session")
+    def test_source_media_serves_prepared_video_audio(
+        self,
+        create_livepeer_stream_session,
+        create_narrative_client,
+    ) -> None:
+        media_path = Path("storage/test-source.mp4")
+        media_path.parent.mkdir(parents=True, exist_ok=True)
+        media_path.write_bytes(b"0000")
+        create_narrative_client.return_value.build_experience.return_value = type(
+            "Experience",
+            (),
+            {
+                "title": "Dune Audiobook",
+                "author": "Frank Herbert",
+                "pdf_url": "http://example.com/dune.mp4",
+                "storage_path": "storage/openai_search_media",
+                "source_audio_path": str(media_path),
+                "source_audio_mime_type": "video/mp4",
+                "chunks": [
+                    NarrativeChunk(
+                        chapter_title="Audiobook source",
+                        chunk_index=1,
+                        text="Streaming audio for Dune.",
+                    )
+                ],
+            },
+        )()
+        create_livepeer_stream_session.return_value = StreamSession(
+            session_id="livepeer-123",
+            whip_url="https://video.example/whip",
+            whep_url="https://video.example/whep",
+            output_video_url="https://video.example/whep",
+            upstream_stream_id="livepeer-123",
+        )
+
+        response = self.client.post(
+            "/",
+            {
+                "book_query": "Dune",
+                "daydream_prompt": "desert storm",
+                "browser_session_id": "browser-uuid",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+
+        audio_response = self.client.get(
+            "/tts/coqui", {"sessionId": "browser-uuid", "chunkIndex": "1"}
+        )
+
+        self.assertEqual(audio_response.status_code, 200)
+        self.assertEqual(audio_response["Content-Type"], "video/mp4")
+        media_path.unlink(missing_ok=True)
+
 
 class WebResearchNarrativeClientTests(TestCase):
     def test_chunk_text_splits_large_text(self) -> None:
@@ -293,3 +353,36 @@ class DaydreamClientTests(TestCase):
         client = DaydreamClient()
         with self.assertRaises(UpstreamServiceError):
             client._extract_stream_session({"id": "abc"})
+
+
+class NarrativeClientFactoryTests(TestCase):
+    @patch.dict("os.environ", {"NARRATIVE_MODE_PROVIDER": "OPENAI_SEARCH"}, clear=False)
+    def test_factory_returns_openai_search_client(self) -> None:
+        self.assertIsInstance(NarrativeClientFactory.create(), OpenAiSearchNarrativeClient)
+
+
+class OpenAiSearchNarrativeClientTests(TestCase):
+    def test_parse_openai_search_response_extracts_json(self) -> None:
+        client = OpenAiSearchNarrativeClient()
+
+        parsed = client._parse_openai_search_response(
+            {
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": (
+                                    '{"title":"Dune Audiobook","author":"Frank Herbert",'
+                                    '"video_url":"https://example.com/dune.mp4",'
+                                    '"summary":"Streaming audio for Dune."}'
+                                ),
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
+
+        self.assertEqual(parsed["video_url"], "https://example.com/dune.mp4")

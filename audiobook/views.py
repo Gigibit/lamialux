@@ -1,6 +1,7 @@
 import json
 import logging
 import uuid
+from pathlib import Path
 
 import httpx
 from django.http import FileResponse, HttpRequest, HttpResponse, JsonResponse
@@ -13,10 +14,10 @@ from .services import (
     CoquiTtsClient,
     DaydreamClient,
     MusicSearchClient,
+    NarrativeClientFactory,
     PromptStreamUpdater,
     StreamSession,
     UpstreamServiceError,
-    WebResearchNarrativeClient,
 )
 
 logger = logging.getLogger("audiobook")
@@ -428,7 +429,7 @@ def _handle_book_start(
     browser_session_id = _normalize_browser_session_id(request)
 
     try:
-        experience = WebResearchNarrativeClient().build_experience(query)
+        experience = NarrativeClientFactory.create().build_experience(query)
         livepeer_stream_session = DaydreamClient().create_livepeer_stream_session(prompt)
     except UpstreamServiceError as exc:
         logger.error("Failed to start book stream for query '%s': %s", query, exc)
@@ -443,6 +444,8 @@ def _handle_book_start(
         "author": experience.author,
         "prompt": prompt,
         "pdf_url": experience.pdf_url,
+        "source_audio_path": experience.source_audio_path,
+        "source_audio_mime_type": experience.source_audio_mime_type,
         "storage_path": experience.storage_path,
         "chunks": [
             {
@@ -456,7 +459,7 @@ def _handle_book_start(
     request.session["prepared_stream"] = prepared_stream
     context["stream"] = prepared_stream
     context["message"] = (
-        "PDF found, downloaded, chunked, and prepared for browser TTS. "
+        "Narrative source found, media prepared, and playback is ready. "
         "The frontend can now reconnect to the matching Livepeer stream session."
     )
     return context, 200
@@ -627,13 +630,55 @@ def coqui_tts(request: HttpRequest) -> HttpResponse:
             text=text,
         )
     except UpstreamServiceError as exc:
+    source_audio_path = str(home_stream.get("source_audio_path") or "").strip()
+    source_audio_mime_type = str(home_stream.get("source_audio_mime_type") or "").strip()
+    if source_audio_path:
+        if chunk_index != 1:
+            logger.error(
+                "Source media playback requested for unsupported chunk index. "
+                "session_id=%s chunk_index=%s",
+                session_id,
+                chunk_index,
+            )
+            logger.error(
+                "Returning non-2xx response for unsupported source media chunk: status=404"
+            )
+            return HttpResponse("Requested chunk not found.", status=404)
+        result = type(
+            "PreparedSourceAudioResult",
+            (),
+            {"audio_path": source_audio_path, "mime_type": source_audio_mime_type or "video/mp4"},
+        )()
+    else:
+        chunk = home_stream["chunks"][chunk_index - 1]
+        try:
+            result = CoquiTtsClient().synthesize(
+                session_id=session_id,
+                chunk_index=chunk_index,
+                text=str(chunk.get("text") or ""),
+            )
+        except UpstreamServiceError as exc:
+            logger.error(
+                "Coqui TTS generation failed for session '%s' chunk %s: %s",
+                session_id,
+                chunk_index,
+                exc,
+            )
+            logger.error("Returning non-2xx response for Coqui synthesis failure: status=502")
+            return HttpResponse(str(exc), status=502)
+
+    audio_file_path = str(result.audio_path).strip()
+    if not audio_file_path or not Path(audio_file_path).exists():
         logger.error(
-            "Coqui TTS generation failed for session '%s' chunk %s: %s",
+            "Prepared audio file is missing for session '%s' chunk %s: %s",
             session_id,
             chunk_index,
-            exc,
+            audio_file_path,
         )
-        logger.error("Returning non-2xx response for Coqui synthesis failure: status=502")
-        return HttpResponse(str(exc), status=502)
+        logger.error("Returning non-2xx response for missing prepared audio file: status=404")
+        return HttpResponse("Prepared audio file not found.", status=404)
 
     return FileResponse(open(result.audio_path, "rb"), content_type=result.mime_type)
+    response = FileResponse(open(audio_file_path, "rb"), content_type=result.mime_type)
+    response["Cache-Control"] = "public, max-age=31536000, immutable"
+    return response

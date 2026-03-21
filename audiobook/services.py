@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import logging
 import os
 import re
@@ -37,6 +38,8 @@ class NarrativeExperience:
     chunks: list[NarrativeChunk]
     storage_path: str
     cache_hit: bool = False
+    source_audio_path: str = ""
+    source_audio_mime_type: str = ""
 
 
 @dataclass
@@ -66,6 +69,195 @@ class StreamSession:
     upstream_stream_id: str = ""
     initial_whep_url: str = ""
     whep_resource_url: str = ""
+
+
+class OpenAiSearchNarrativeClient:
+    def __init__(self) -> None:
+        self.api_key = os.getenv("OPENAI_API_KEY", "").strip()
+        self.base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+        self.model = os.getenv("OPENAI_SEARCH_MODEL", "gpt-4.1-mini")
+        self.timeout = float(os.getenv("OPENAI_SEARCH_TIMEOUT_SECONDS", "45"))
+        self.media_cache_dir = Path(
+            os.getenv("OPENAI_SEARCH_MEDIA_CACHE_DIR", "storage/openai_search_media")
+        )
+
+    def build_experience(self, query: str) -> NarrativeExperience:
+        if not self.api_key:
+            logger.error("OPENAI_SEARCH mode requested without OPENAI_API_KEY configured.")
+            raise UpstreamServiceError("OPENAI_SEARCH requires OPENAI_API_KEY.")
+
+        search_result = self._search_audiobook_video(query)
+        media_result = self._download_media(search_result["video_url"])
+        return NarrativeExperience(
+            title=search_result["title"],
+            author=search_result["author"],
+            pdf_url=search_result["video_url"],
+            chunks=[
+                NarrativeChunk(
+                    chapter_title="Audiobook source",
+                    chunk_index=1,
+                    text=search_result["summary"],
+                )
+            ],
+            storage_path=str(self.media_cache_dir),
+            cache_hit=media_result.cache_hit,
+            source_audio_path=media_result.audio_path,
+            source_audio_mime_type=media_result.mime_type,
+        )
+
+    def _search_audiobook_video(self, query: str) -> dict[str, str]:
+        prompt = (
+            "Find one publicly reachable audiobook video page or direct media URL "
+            "for the requested work. Prefer stable video hosts that allow "
+            "direct playback in a browser. Respond with ONLY valid JSON "
+            "matching this schema: "
+            '{"title": string, "author": string, "video_url": string, "summary": string}. '
+            f"User request: {query}"
+        )
+        payload = {
+            "model": self.model,
+            "input": prompt,
+            "tools": [{"type": "web_search_preview"}],
+        }
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        with httpx.Client(timeout=self.timeout) as client:
+            try:
+                response = client.post(f"{self.base_url}/responses", headers=headers, json=payload)
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                logger.error(
+                    "OpenAI search failed with status %s for query '%s': %s",
+                    exc.response.status_code,
+                    query,
+                    exc,
+                )
+                raise UpstreamServiceError(
+                    "OpenAI search could not find an audiobook source."
+                ) from exc
+            except httpx.HTTPError as exc:
+                logger.error("OpenAI search connection error for query '%s': %s", query, exc)
+                raise UpstreamServiceError("OpenAI search is unavailable right now.") from exc
+
+        parsed = self._parse_openai_search_response(response.json())
+        video_url = str(parsed.get("video_url") or "").strip()
+        if not video_url.startswith(("http://", "https://")):
+            logger.error(
+                "OpenAI search returned an invalid video_url for query '%s': %s", query, parsed
+            )
+            raise UpstreamServiceError("OpenAI search did not return a usable audiobook video URL.")
+        return {
+            "title": str(parsed.get("title") or query).strip() or query,
+            "author": str(parsed.get("author") or "Unknown author").strip() or "Unknown author",
+            "video_url": video_url,
+            "summary": str(parsed.get("summary") or f"Streaming audio for {query}.").strip()
+            or f"Streaming audio for {query}.",
+        }
+
+    def _parse_openai_search_response(self, payload: dict[str, object]) -> dict[str, object]:
+        text_fragments: list[str] = []
+        for item in payload.get("output", []):
+            if not isinstance(item, dict) or item.get("type") != "message":
+                continue
+            for content in item.get("content", []):
+                if isinstance(content, dict) and content.get("type") == "output_text":
+                    text_value = str(content.get("text") or "").strip()
+                    if text_value:
+                        text_fragments.append(text_value)
+        aggregated_text = "\n".join(text_fragments).strip()
+        if not aggregated_text:
+            logger.error("OpenAI search response did not contain output_text: %s", payload)
+            raise UpstreamServiceError("OpenAI search returned an empty result.")
+        try:
+            return json.loads(aggregated_text)
+        except json.JSONDecodeError:
+            match = re.search(r"\{.*\}", aggregated_text, re.DOTALL)
+            if match:
+                try:
+                    return json.loads(match.group(0))
+                except json.JSONDecodeError as exc:
+                    logger.error(
+                        "OpenAI search returned unparsable JSON content: %s error=%s",
+                        aggregated_text[:1000],
+                        exc,
+                    )
+                    raise UpstreamServiceError(
+                        "OpenAI search returned an invalid audiobook result."
+                    ) from exc
+            logger.error("OpenAI search returned non-JSON content: %s", aggregated_text[:1000])
+            raise UpstreamServiceError("OpenAI search returned an invalid audiobook result.")
+
+    def _download_media(self, media_url: str) -> CoquiTtsResult:
+        self.media_cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_key = hashlib.sha256(media_url.encode("utf-8")).hexdigest()
+        existing = next(iter(sorted(self.media_cache_dir.glob(f"{cache_key}.*"))), None)
+        if existing is not None:
+            return CoquiTtsResult(
+                audio_path=str(existing),
+                mime_type=self._guess_media_mime_type(existing.suffix),
+                cache_hit=True,
+            )
+
+        with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
+            try:
+                response = client.get(media_url, headers={"User-Agent": "Mozilla/5.0 LamiaLux/1.0"})
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                logger.error(
+                    "Audiobook media download failed with status %s for %s: %s",
+                    exc.response.status_code,
+                    media_url,
+                    exc,
+                )
+                raise UpstreamServiceError(
+                    "The selected audiobook media could not be downloaded."
+                ) from exc
+            except httpx.HTTPError as exc:
+                logger.error("Audiobook media download connection error for %s: %s", media_url, exc)
+                raise UpstreamServiceError("Audiobook media download is unavailable.") from exc
+
+        content_type = str(response.headers.get("content-type") or "").split(";")[0].strip().lower()
+        suffix = self._suffix_for_media_url(media_url, content_type)
+        output_path = self.media_cache_dir / f"{cache_key}{suffix}"
+        output_path.write_bytes(response.content)
+        mime_type = content_type or self._guess_media_mime_type(suffix)
+        return CoquiTtsResult(audio_path=str(output_path), mime_type=mime_type, cache_hit=False)
+
+    def _suffix_for_media_url(self, media_url: str, content_type: str) -> str:
+        parsed = urlparse(media_url)
+        suffix = Path(parsed.path).suffix.lower()
+        if suffix in {".mp4", ".m4a", ".mp3", ".webm", ".ogg", ".wav"}:
+            return suffix
+        if content_type == "video/mp4":
+            return ".mp4"
+        if content_type == "audio/mpeg":
+            return ".mp3"
+        if content_type == "audio/mp4":
+            return ".m4a"
+        if content_type == "video/webm":
+            return ".webm"
+        if content_type == "audio/ogg":
+            return ".ogg"
+        logger.error(
+            "Unknown audiobook media suffix/content-type combination. "
+            "media_url=%s content_type=%s; defaulting to .mp4",
+            media_url,
+            content_type,
+        )
+        return ".mp4"
+
+    def _guess_media_mime_type(self, suffix: str) -> str:
+        return {
+            ".mp4": "video/mp4",
+            ".m4a": "audio/mp4",
+            ".mp3": "audio/mpeg",
+            ".webm": "video/webm",
+            ".ogg": "audio/ogg",
+            ".wav": "audio/wav",
+        }.get(suffix.lower(), "application/octet-stream")
 
 
 class WebResearchNarrativeClient:
@@ -483,6 +675,29 @@ class MusicSearchClient:
             preview_url=str(track.get("preview_url") or ""),
             provider="SPOTIFY",
         )
+class NarrativeModeProvider:
+    THIRDY_PARTS_STORYTEL = "THIRDY_PARTS_STORYTEL"
+    WEB_RESEARCH_TTS = "WEB_RESEARCH_TTS"
+    OPENAI_SEARCH = "OPENAI_SEARCH"
+
+
+class NarrativeClientFactory:
+    @staticmethod
+    def create() -> WebResearchNarrativeClient | OpenAiSearchNarrativeClient:
+        provider = (
+            os.getenv("NARRATIVE_MODE_PROVIDER", NarrativeModeProvider.WEB_RESEARCH_TTS)
+            .strip()
+            .upper()
+        )
+        if provider in {
+            NarrativeModeProvider.WEB_RESEARCH_TTS,
+            NarrativeModeProvider.THIRDY_PARTS_STORYTEL,
+        }:
+            return WebResearchNarrativeClient()
+        if provider == NarrativeModeProvider.OPENAI_SEARCH:
+            return OpenAiSearchNarrativeClient()
+        logger.error("Unsupported NARRATIVE_MODE_PROVIDER configured: %s", provider)
+        raise UpstreamServiceError("Unsupported NARRATIVE_MODE_PROVIDER configuration.")
 
 
 class DaydreamClient:
