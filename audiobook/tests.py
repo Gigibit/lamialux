@@ -78,6 +78,14 @@ class HomeViewTests(TestCase):
         )
         self.assertContains(
             response,
+            "const hydrateStreamSession = async () => {",
+        )
+        self.assertContains(
+            response,
+            "await ensureStreamMatch();",
+        )
+        self.assertContains(
+            response,
             "https://raw.githubusercontent.com/Gigibit/ingoya/refs/heads/theia/public/caos.js",
         )
         self.assertEqual(STREAM_SESSIONS["browser-uuid"].whip_url, "https://video.example/whip")
