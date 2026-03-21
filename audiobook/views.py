@@ -70,21 +70,33 @@ def _gateway_variant_livepeer_playback_url(playback_url: str) -> str:
     return playback_url
 
 
+def _expand_whep_candidate_urls(*candidate_urls: str) -> list[str]:
+    candidates: list[str] = []
+    for raw_candidate in candidate_urls:
+        normalized_candidate = str(raw_candidate or "").strip()
+        if not normalized_candidate:
+            continue
+
+        candidate_variants = [
+            normalized_candidate,
+            _normalize_livepeer_playback_url(normalized_candidate),
+            _gateway_variant_livepeer_playback_url(normalized_candidate),
+        ]
+        for candidate_variant in candidate_variants:
+            if candidate_variant and candidate_variant not in candidates:
+                candidates.append(candidate_variant)
+    return candidates
+
+
 def _candidate_whep_urls(stream: StreamSession, method: str) -> list[str]:
     if method in {"PATCH", "DELETE"} and stream.whep_resource_url:
         return [stream.whep_resource_url]
 
-    candidates: list[str] = []
-    raw_candidates = [
+    return _expand_whep_candidate_urls(
         stream.whep_url,
-        _gateway_variant_livepeer_playback_url(stream.whep_url) if stream.whep_url else "",
+        stream.output_video_url,
         stream.initial_whep_url,
-    ]
-    for candidate in raw_candidates:
-        normalized_candidate = str(candidate or "").strip()
-        if normalized_candidate and normalized_candidate not in candidates:
-            candidates.append(normalized_candidate)
-    return candidates
+    )
 
 
 def home(request: HttpRequest) -> HttpResponse:
