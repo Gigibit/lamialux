@@ -3,14 +3,16 @@ import logging
 import uuid
 
 import httpx
-from django.http import HttpRequest, HttpResponse, JsonResponse
+from django.http import FileResponse, HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import render
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
 from .forms import BookRequestForm
 from .services import (
+    CoquiTtsClient,
     DaydreamClient,
+    PromptStreamUpdater,
     StreamSession,
     UpstreamServiceError,
     WebResearchNarrativeClient,
@@ -205,9 +207,7 @@ def whip_proxy(request: HttpRequest, session_id: str) -> HttpResponse:
             "unable to determine the true WHEP upstream target.",
             session_id,
         )
-        logger.error(
-            "Returning non-2xx response for missing WHIP playback header: status=502"
-        )
+        logger.error("Returning non-2xx response for missing WHIP playback header: status=502")
         return HttpResponse("WHIP upstream did not provide a playback URL.", status=502)
 
     normalized_playback_url = playback_url
@@ -239,9 +239,7 @@ def whip_proxy(request: HttpRequest, session_id: str) -> HttpResponse:
                 initial_whep_url=candidate_stream.initial_whep_url or stream.initial_whep_url,
                 whep_resource_url="",
             )
-    response["livepeer-playback-url"] = request.build_absolute_uri(
-        f"/streams/{session_id}/whep"
-    )
+    response["livepeer-playback-url"] = request.build_absolute_uri(f"/streams/{session_id}/whep")
     location = upstream.headers.get("location")
     if location:
         response["location"] = request.build_absolute_uri(f"/streams/{session_id}/whep/resource")
@@ -427,7 +425,7 @@ def _handle_start(
         initial_whep_url=livepeer_stream_session.whep_url,
     )
 
-    context["stream"] = {
+    prepared_stream = {
         "title": experience.title,
         "author": experience.author,
         "prompt": prompt,
@@ -442,8 +440,114 @@ def _handle_start(
             for chunk in experience.chunks
         ],
     }
+    request.session["prepared_stream"] = prepared_stream
+    context["stream"] = prepared_stream
     context["message"] = (
         "PDF found, downloaded, chunked, and prepared for browser TTS. "
         "The frontend can now reconnect to the matching Livepeer stream session."
     )
     return context, 200
+
+
+@csrf_exempt
+@require_POST
+def stream_prompt(request: HttpRequest, session_id: str) -> JsonResponse:
+    stream = STREAM_SESSIONS.get(session_id)
+    if stream is None or not stream.upstream_stream_id:
+        logger.error(
+            "Prompt update requested for unknown or incomplete stream session '%s'.", session_id
+        )
+        logger.error("Returning non-2xx response for missing prompt update session: status=404")
+        return JsonResponse({"error": "Stream session not found."}, status=404)
+
+    try:
+        payload = json.loads(request.body.decode("utf-8") or "{}")
+    except json.JSONDecodeError as exc:
+        logger.error("Invalid prompt update payload for session '%s': %s", session_id, exc)
+        logger.error("Returning non-2xx response for invalid prompt update payload: status=400")
+        return JsonResponse({"error": "Invalid JSON payload."}, status=400)
+
+    prompt = str(payload.get("prompt") or "").strip()
+    if not prompt:
+        logger.error(
+            "Prompt update requested without prompt text for session '%s': payload=%s",
+            session_id,
+            payload,
+        )
+        logger.error("Returning non-2xx response for missing prompt text: status=400")
+        return JsonResponse({"error": "prompt is required."}, status=400)
+
+    try:
+        PromptStreamUpdater().update_prompt(
+            upstream_stream_id=stream.upstream_stream_id,
+            prompt=prompt,
+        )
+    except UpstreamServiceError as exc:
+        logger.error("Prompt update failed for session '%s': %s", session_id, exc)
+        logger.error("Returning non-2xx response for prompt update upstream failure: status=502")
+        return JsonResponse({"error": str(exc)}, status=502)
+
+    return JsonResponse({"message": "Prompt updated."})
+
+
+@require_GET
+def coqui_tts(request: HttpRequest) -> HttpResponse:
+    session_id = str(request.GET.get("sessionId") or "").strip()
+    chunk_index_raw = str(request.GET.get("chunkIndex") or "").strip()
+
+    if not session_id or not chunk_index_raw:
+        logger.error(
+            "Coqui TTS requested without required parameters. session_id=%s chunk_index=%s",
+            session_id,
+            chunk_index_raw,
+        )
+        logger.error("Returning non-2xx response for missing Coqui parameters: status=400")
+        return HttpResponse("sessionId and chunkIndex are required.", status=400)
+
+    try:
+        chunk_index = int(chunk_index_raw)
+    except ValueError as exc:
+        logger.error("Coqui TTS requested with invalid chunk index '%s': %s", chunk_index_raw, exc)
+        logger.error("Returning non-2xx response for invalid Coqui chunk index: status=400")
+        return HttpResponse("chunkIndex must be an integer.", status=400)
+
+    stream_context = STREAM_SESSIONS.get(session_id)
+    if stream_context is None:
+        logger.error("Coqui TTS requested for unknown stream session '%s'.", session_id)
+        logger.error("Returning non-2xx response for missing Coqui stream session: status=404")
+        return HttpResponse("Stream session not found.", status=404)
+
+    home_stream = request.session.get("prepared_stream")
+    if not home_stream or chunk_index < 1 or chunk_index > len(home_stream.get("chunks", [])):
+        logger.error(
+            (
+                "Coqui TTS requested for unavailable chunk. "
+                "session_id=%s chunk_index=%s available_chunks=%s"
+            ),
+            session_id,
+            chunk_index,
+            len(home_stream.get("chunks", [])) if home_stream else 0,
+        )
+        logger.error("Returning non-2xx response for missing Coqui chunk: status=404")
+        return HttpResponse("Requested chunk not found.", status=404)
+
+    chunk = home_stream["chunks"][chunk_index - 1]
+    try:
+        result = CoquiTtsClient().synthesize(
+            session_id=session_id,
+            chunk_index=chunk_index,
+            text=str(chunk.get("text") or ""),
+        )
+    except UpstreamServiceError as exc:
+        logger.error(
+            "Coqui TTS generation failed for session '%s' chunk %s: %s",
+            session_id,
+            chunk_index,
+            exc,
+        )
+        logger.error("Returning non-2xx response for Coqui synthesis failure: status=502")
+        return HttpResponse(str(exc), status=502)
+
+    response = FileResponse(open(result.audio_path, "rb"), content_type=result.mime_type)
+    response["Cache-Control"] = "public, max-age=31536000, immutable"
+    return response

@@ -11,12 +11,12 @@
     <main class="container">
       <section class="hero panel">
         <div>
-          <p class="eyebrow">PDF search · Browser TTS · Livepeer WHIP/WHEP</p>
+          <p class="eyebrow">PDF search · Coqui TTS · Livepeer WHIP/WHEP</p>
           <h1>LamiaLux</h1>
           <p class="subtitle">
-            Search for a book PDF, download it, read it with browser text-to-speech,
-            keep audio local, and publish the same narration session into Livepeer WHIP while
-            monitoring the WHEP output video.
+            Search for a book PDF, download it, read it with Coqui text-to-speech,
+            stream the generated narration, and publish the same narration session into
+            Livepeer WHIP while monitoring the WHEP output video.
           </p>
         </div>
       </section>
@@ -50,10 +50,8 @@
             <p class="small" id="stream-session-label">{% if stream %}Session not matched yet.{% else %}Search a PDF to bind this canvas to a stream session.{% endif %}</p>
           </div>
           <p class="small">{% if stream %}{{ stream.author }}{% else %}The visible canvas is always mounted so the animation surface is available before streaming starts.{% endif %}</p>
-          {% if stream %}
-            <p class="small"><a href="{{ stream.pdf_url }}" target="_blank" rel="noreferrer">Open downloaded PDF source</a></p>
-          {% endif %}
           <video id="whep-player" controls autoplay playsinline muted></video>
+          <audio id="coqui-player" preload="none" hidden></audio>
           <div class="visualizer-stack">
             <div>
               <p class="eyebrow">Caos canvas</p>
@@ -70,8 +68,8 @@
           </div>
           <p id="stream-status" class="small">{% if stream %}Idle.{% else %}Canvas ready. Search and prepare a stream to enable WHIP/WHEP and TTS controls.{% endif %}</p>
           <p class="small note">
-            Browser speech synthesis plays locally. Because browsers do not reliably expose native TTS as a capturable
-            audio track, WHIP receives the illustrated canvas plus a Web Audio narration bed so the stream remains valid.
+            Coqui TTS audio is generated on the server and played through the browser audio graph so the
+            narration can be heard locally and embedded into the published WHIP stream.
           </p>
         </article>
 
@@ -88,7 +86,7 @@
               {% endfor %}
             </ol>
           {% else %}
-            <p class="small">No PDF prepared yet. Submit a query to load chunks for browser TTS and stream publishing.</p>
+            <p class="small">No PDF prepared yet. Submit a query to load chunks for Coqui TTS and stream publishing.</p>
           {% endif %}
         </aside>
       </section>
@@ -105,9 +103,11 @@
         const animationCanvas = document.getElementById('theia-canvas');
         const animationOverlay = document.getElementById('theia-canvas-overlay');
         const video = document.getElementById('whep-player');
+        const coquiPlayer = document.getElementById('coqui-player');
         const sessionLabel = document.getElementById('stream-session-label');
         const items = Array.from(document.querySelectorAll('.chunk-list li'));
         const hasPreparedStream = {{ stream|yesno:'true,false' }};
+        const PROMPT_UPDATE_INTERVAL_MS = 5000;
 
         const createBrowserSessionId = () => ((window.crypto && typeof window.crypto.randomUUID === 'function')
           ? window.crypto.randomUUID()
@@ -121,7 +121,7 @@
           browserSessionInput.value = browserSessionId;
         }
 
-        if (!playButton || !stopButton || !connectButton || !statusEl || !animationCanvas || !animationOverlay || !video || !sessionLabel) {
+        if (!playButton || !stopButton || !connectButton || !statusEl || !animationCanvas || !animationOverlay || !video || !sessionLabel || !coquiPlayer) {
           return;
         }
 
@@ -139,15 +139,20 @@
         let whepResourceUrl = null;
         let currentIndex = 0;
         let cancelled = false;
-        let animationFrameId = null;
-        let audioContext = null;
-        let destination = null;
-        let gainNode = null;
-        let oscillator = null;
         let compositeStream = null;
         let connectPromise = null;
         let streamReady = false;
-        let speechReadyPromise = null;
+        let audioContext = null;
+        let destination = null;
+        let gainNode = null;
+        let sourceNode = null;
+        let promptUpdateTimerId = null;
+        let playbackToken = 0;
+
+        const sentencePool = items
+          .flatMap((item) => (item.dataset.text || '').match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [])
+          .map((sentence) => sentence.trim())
+          .filter((sentence) => sentence.length > 20);
 
         const setStatus = (message) => {
           statusEl.textContent = message;
@@ -191,6 +196,65 @@
           };
         };
 
+        const chooseRandomPromptSentence = () => {
+          if (!sentencePool.length) {
+            return '';
+          }
+          const randomIndex = Math.floor(Math.random() * sentencePool.length);
+          return sentencePool[randomIndex];
+        };
+
+        const stopPromptUpdates = () => {
+          if (promptUpdateTimerId) {
+            window.clearInterval(promptUpdateTimerId);
+            promptUpdateTimerId = null;
+          }
+        };
+
+        const pushPromptUpdate = async (prompt) => {
+          if (!prompt || !streamSession.sessionId) {
+            return;
+          }
+
+          try {
+            const response = await fetch(`/streams/${encodeURIComponent(streamSession.sessionId)}/prompt`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ prompt }),
+            });
+            if (!response.ok) {
+              const body = await response.text();
+              logger.error('Prompt stream update failed.', {
+                sessionId: streamSession.sessionId,
+                status: response.status,
+                prompt,
+                body,
+              });
+            }
+          } catch (error) {
+            logger.error('Prompt stream update raised an unexpected error.', {
+              sessionId: streamSession.sessionId,
+              prompt,
+              error,
+            });
+          }
+        };
+
+        const startPromptUpdates = () => {
+          stopPromptUpdates();
+          if (!sentencePool.length) {
+            logger.error('Prompt stream updates were requested without any readable sentences.', { sessionId: streamSession.sessionId });
+            return;
+          }
+
+          promptUpdateTimerId = window.setInterval(() => {
+            const prompt = chooseRandomPromptSentence();
+            if (prompt) {
+              pushPromptUpdate(prompt);
+            }
+          }, PROMPT_UPDATE_INTERVAL_MS);
+        };
+
         const logPeerConnectionState = (label, peerConnection, extra = {}) => {
           console.info(`${label} peer connection state changed.`, {
             connectionState: peerConnection.connectionState,
@@ -199,6 +263,30 @@
             signalingState: peerConnection.signalingState,
             ...extra,
           });
+        };
+
+        const handleViewerIceCandidate = async ({ candidate }) => {
+          if (!candidate || !whepResourceUrl) {
+            return;
+          }
+
+          const sdpFragment = `a=${candidate.candidate}\n`;
+          try {
+            await fetch(whepResourceUrl, {
+              method: 'PATCH',
+              headers: {
+                'Content-Type': 'application/trickle-ice-sdpfrag',
+              },
+              body: sdpFragment,
+            });
+          } catch (error) {
+            console.warn('Unable to PATCH WHEP ICE candidate to the proxy resource.', {
+              error,
+              sessionId: streamSession.sessionId,
+              whepResourceUrl,
+              candidate,
+            });
+          }
         };
 
         const ensureStreamMatch = async () => {
@@ -267,13 +355,11 @@
           audioContext = new AudioContext();
           destination = audioContext.createMediaStreamDestination();
           gainNode = audioContext.createGain();
-          gainNode.gain.value = 0.03;
-          oscillator = audioContext.createOscillator();
-          oscillator.type = 'sine';
-          oscillator.frequency.value = 220;
-          oscillator.connect(gainNode);
+          gainNode.gain.value = 1;
+          sourceNode = audioContext.createMediaElementSource(coquiPlayer);
+          sourceNode.connect(gainNode);
           gainNode.connect(destination);
-          oscillator.start();
+          gainNode.connect(audioContext.destination);
           await audioContext.resume();
         };
 
@@ -291,58 +377,6 @@
             ...destination.stream.getAudioTracks(),
           ]);
           return compositeStream;
-        };
-
-        const waitForSpeechReady = async () => {
-          if (speechReadyPromise) {
-            return speechReadyPromise;
-          }
-
-          speechReadyPromise = new Promise((resolve) => {
-            const synth = window.speechSynthesis;
-            const complete = () => {
-              synth.removeEventListener('voiceschanged', complete);
-              window.clearTimeout(fallbackTimeoutId);
-              resolve();
-            };
-
-            const existingVoices = synth.getVoices();
-            if (existingVoices.length) {
-              resolve();
-              return;
-            }
-
-            const fallbackTimeoutId = window.setTimeout(resolve, 250);
-            synth.addEventListener('voiceschanged', complete, { once: true });
-            synth.getVoices();
-          });
-
-          return speechReadyPromise;
-        };
-
-        const handleViewerIceCandidate = async ({ candidate }) => {
-          if (!candidate || !whepResourceUrl) {
-            return;
-          }
-
-          const sdpFragment = `a=${candidate.candidate}
-`;
-          try {
-            await fetch(whepResourceUrl, {
-              method: 'PATCH',
-              headers: {
-                'Content-Type': 'application/trickle-ice-sdpfrag',
-              },
-              body: sdpFragment,
-            });
-          } catch (error) {
-            console.warn('Unable to PATCH WHEP ICE candidate to the proxy resource.', {
-              error,
-              sessionId: streamSession.sessionId,
-              whepResourceUrl,
-              candidate,
-            });
-          }
         };
 
         const hydrateStreamSession = async () => {
@@ -515,32 +549,80 @@
           return connectPromise;
         };
 
-        const updateTone = async () => {
-          if (!gainNode || cancelled) {
-            return;
-          }
-          await ensureAudioGraph();
-          gainNode.gain.value = 0.02 + ((currentIndex % 4) * 0.01);
-          animationFrameId = window.setTimeout(updateTone, 300);
+        const fetchChunkAudioUrl = (index) => `/tts/coqui?sessionId=${encodeURIComponent(streamSession.sessionId)}&chunkIndex=${index}`;
+
+        const stopPlayback = () => {
+          cancelled = true;
+          playbackToken += 1;
+          stopPromptUpdates();
+          coquiPlayer.pause();
+          coquiPlayer.removeAttribute('src');
+          coquiPlayer.load();
+          items.forEach((item) => item.classList.remove('active'));
+          setStatus('Reading stopped.');
         };
 
-        const speakChunk = (index) => {
-          if (cancelled || index >= items.length) {
+        const playChunk = async (index, token) => {
+          if (cancelled || token !== playbackToken) {
+            return;
+          }
+          if (index >= items.length) {
+            stopPromptUpdates();
             setStatus('Reading complete.');
             return;
           }
+
           currentIndex = index;
           items.forEach((item, itemIndex) => item.classList.toggle('active', itemIndex === index));
           const text = items[index].dataset.text;
           drawCanvas(text);
-          setStatus(`Reading chunk ${index + 1} of ${items.length}...`);
-          const utterance = new SpeechSynthesisUtterance(text);
-          utterance.rate = 1;
-          utterance.onend = () => speakChunk(index + 1);
-          utterance.onerror = () => {
-            setStatus('Browser TTS failed on the current chunk.');
-          };
-          window.speechSynthesis.speak(utterance);
+          setStatus(`Reading chunk ${index + 1} of ${items.length} with Coqui TTS...`);
+
+          const audioUrl = fetchChunkAudioUrl(index + 1);
+          coquiPlayer.src = audioUrl;
+          coquiPlayer.currentTime = 0;
+
+          try {
+            await coquiPlayer.play();
+          } catch (error) {
+            logger.error('Coqui audio playback failed to start.', {
+              sessionId: streamSession.sessionId,
+              index,
+              audioUrl,
+              error,
+            });
+            setStatus('Coqui TTS playback failed to start.');
+            return;
+          }
+
+          await new Promise((resolve, reject) => {
+            const onEnded = () => {
+              cleanup();
+              resolve();
+            };
+            const onError = () => {
+              cleanup();
+              reject(new Error('The Coqui TTS audio element reported an error.'));
+            };
+            const cleanup = () => {
+              coquiPlayer.removeEventListener('ended', onEnded);
+              coquiPlayer.removeEventListener('error', onError);
+            };
+
+            coquiPlayer.addEventListener('ended', onEnded, { once: true });
+            coquiPlayer.addEventListener('error', onError, { once: true });
+          }).catch((error) => {
+            logger.error('Coqui TTS audio playback failed mid-chunk.', {
+              sessionId: streamSession.sessionId,
+              index,
+              error,
+            });
+            setStatus('Coqui TTS failed on the current chunk.');
+          });
+
+          if (!cancelled && token === playbackToken) {
+            await playChunk(index + 1, token);
+          }
         };
 
         playButton.addEventListener('click', async () => {
@@ -551,31 +633,33 @@
           }
 
           cancelled = false;
-          await waitForSpeechReady();
+          playbackToken += 1;
+          const token = playbackToken;
+          await ensureAudioGraph();
           if (audioContext && audioContext.state === 'suspended') {
             await audioContext.resume();
           }
 
           if (!streamReady) {
             connectStream().catch((error) => {
-              logger.error('Streaming setup failed while local TTS continued:', error);
+              logger.error('Streaming setup failed while Coqui TTS continued:', error);
             });
           }
 
-          updateTone();
-          speakChunk(0);
+          startPromptUpdates();
+          const initialPrompt = chooseRandomPromptSentence();
+          if (initialPrompt) {
+            pushPromptUpdate(initialPrompt);
+          }
+          playChunk(0, token);
         });
 
         stopButton.addEventListener('click', () => {
-          cancelled = true;
-          window.speechSynthesis.cancel();
-          if (animationFrameId) {
-            window.clearTimeout(animationFrameId);
-          }
-          setStatus('Reading stopped.');
+          stopPlayback();
         });
 
         window.addEventListener('beforeunload', () => {
+          stopPromptUpdates();
           destroyViewerSession();
           if (publisherPc) {
             closePeerConnection(publisherPc);
