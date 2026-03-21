@@ -109,6 +109,50 @@ class WebResearchNarrativeClientTests(TestCase):
 
         self.assertTrue(sqlite_path.exists())
 
+    def test_store_chunks_supports_legacy_prompt_column(self) -> None:
+        client = WebResearchNarrativeClient()
+        sqlite_path = Path("/tmp/lamialux-legacy.sqlite3")
+        if sqlite_path.exists():
+            sqlite_path.unlink()
+        client.sqlite_path = sqlite_path
+
+        import sqlite3
+
+        with sqlite3.connect(sqlite_path) as connection:
+            connection.execute(
+                """
+                CREATE TABLE narrative_chunks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    query TEXT NOT NULL,
+                    prompt TEXT NOT NULL,
+                    pdf_url TEXT NOT NULL,
+                    chapter_title TEXT NOT NULL,
+                    chunk_index INTEGER NOT NULL,
+                    text TEXT NOT NULL
+                )
+                """
+            )
+            connection.commit()
+
+        client._store_chunks(
+            query="odyssey",
+            pdf_url="http://example.com/odyssey.pdf",
+            chunks=[
+                NarrativeChunk(
+                    chapter_title="Book I",
+                    chunk_index=1,
+                    text="Sing to me of the man, Muse.",
+                )
+            ],
+        )
+
+        with sqlite3.connect(sqlite_path) as connection:
+            row = connection.execute(
+                "SELECT query, prompt, pdf_url FROM narrative_chunks"
+            ).fetchone()
+
+        self.assertEqual(row, ("odyssey", "odyssey", "http://example.com/odyssey.pdf"))
+
 
 class WebResearchSearchTests(TestCase):
     def test_search_pdf_returns_url_without_human_repr(self) -> None:
