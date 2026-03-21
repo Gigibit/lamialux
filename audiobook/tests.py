@@ -30,8 +30,9 @@ class HomeViewTests(TestCase):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
 
+    @patch("audiobook.views.DaydreamClient.create_livepeer_stream_session")
     @patch("audiobook.views.WebResearchNarrativeClient.build_experience")
-    def test_start_stream_success(self, build_experience) -> None:
+    def test_start_stream_success(self, build_experience, create_livepeer_stream_session) -> None:
         build_experience.return_value = type(
             "Experience",
             (),
@@ -49,7 +50,20 @@ class HomeViewTests(TestCase):
                 ],
             },
         )()
-        response = self.client.post("/", {"book_query": "Dune", "daydream_prompt": "desert storm"})
+        create_livepeer_stream_session.return_value = StreamSession(
+            session_id="livepeer-123",
+            whip_url="https://video.example/whip",
+            whep_url="https://video.example/whep",
+            output_video_url="https://video.example/whep",
+        )
+        response = self.client.post(
+            "/",
+            {
+                "book_query": "Dune",
+                "daydream_prompt": "desert storm",
+                "browser_session_id": "browser-uuid",
+            },
+        )
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "PDF found, downloaded, chunked")
@@ -57,17 +71,31 @@ class HomeViewTests(TestCase):
         self.assertContains(response, "Open downloaded PDF source")
         self.assertContains(response, "Fear is the mind killer")
         self.assertContains(response, 'id="theia-canvas"')
+        self.assertContains(response, 'name="browser_session_id" id="browser-session-id"')
+        self.assertContains(
+            response,
+            "localStorage.setItem('lamialux.browserSessionId', browserSessionId)",
+        )
         self.assertContains(
             response,
             "https://raw.githubusercontent.com/Gigibit/ingoya/refs/heads/theia/public/caos.js",
         )
+        self.assertEqual(STREAM_SESSIONS["browser-uuid"].whip_url, "https://video.example/whip")
+        self.assertEqual(STREAM_SESSIONS["livepeer-123"].session_id, "livepeer-123")
 
     @patch(
         "audiobook.views.WebResearchNarrativeClient.build_experience",
         side_effect=UpstreamServiceError("boom"),
     )
     def test_start_stream_error(self, _mock_find) -> None:
-        response = self.client.post("/", {"book_query": "Dune", "daydream_prompt": "desert storm"})
+        response = self.client.post(
+            "/",
+            {
+                "book_query": "Dune",
+                "daydream_prompt": "desert storm",
+                "browser_session_id": "browser-uuid",
+            },
+        )
         self.assertEqual(response.status_code, 502)
         self.assertContains(response, "boom", status_code=502)
 
@@ -144,6 +172,51 @@ class HomeViewTests(TestCase):
 
         self.assertEqual(response.status_code, 404)
         self.assertJSONEqual(response.content, {"error": "No stream match found."})
+
+
+    @patch("audiobook.views.uuid.uuid4", return_value="generated-browser-uuid")
+    @patch("audiobook.views.DaydreamClient.create_livepeer_stream_session")
+    @patch("audiobook.views.WebResearchNarrativeClient.build_experience")
+    def test_start_stream_generates_fallback_browser_session_id(
+        self,
+        build_experience,
+        create_livepeer_stream_session,
+        _mock_uuid4,
+    ) -> None:
+        build_experience.return_value = type(
+            "Experience",
+            (),
+            {
+                "title": "Dune · Chapter 1",
+                "author": "PDF source",
+                "pdf_url": "http://example.com/dune.pdf",
+                "storage_path": "storage/web.sqlite3",
+                "chunks": [
+                    NarrativeChunk(
+                        chapter_title="Chapter 1",
+                        chunk_index=1,
+                        text="Fear is the mind killer.",
+                    )
+                ],
+            },
+        )()
+        create_livepeer_stream_session.return_value = StreamSession(
+            session_id="livepeer-123",
+            whip_url="https://video.example/whip",
+            whep_url="https://video.example/whep",
+            output_video_url="https://video.example/whep",
+        )
+
+        response = self.client.post(
+            "/",
+            {
+                "book_query": "Dune",
+                "daydream_prompt": "desert storm",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("generated-browser-uuid", STREAM_SESSIONS)
 
 
 class WebResearchNarrativeClientTests(TestCase):

@@ -1,5 +1,6 @@
 import json
 import logging
+import uuid
 
 import httpx
 from django.http import HttpRequest, HttpResponse, JsonResponse
@@ -8,7 +9,12 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
 from .forms import BookRequestForm
-from .services import StreamSession, UpstreamServiceError, WebResearchNarrativeClient
+from .services import (
+    DaydreamClient,
+    StreamSession,
+    UpstreamServiceError,
+    WebResearchNarrativeClient,
+)
 
 logger = logging.getLogger("audiobook")
 STREAM_SESSIONS: dict[str, StreamSession] = {}
@@ -232,6 +238,19 @@ def _proxy_whep_request(request: HttpRequest, session_id: str, method: str) -> H
     return response
 
 
+def _normalize_browser_session_id(request: HttpRequest) -> str:
+    requested_session_id = str(request.POST.get("browser_session_id") or "").strip()
+    if requested_session_id:
+        return requested_session_id
+
+    generated_session_id = str(uuid.uuid4())
+    logger.error(
+        "Start request missing browser_session_id; generated fallback session '%s'.",
+        generated_session_id,
+    )
+    return generated_session_id
+
+
 def _handle_start(
     request: HttpRequest,
     context: dict[str, object],
@@ -246,14 +265,29 @@ def _handle_start(
 
     query = form.cleaned_data["book_query"].strip()
     prompt = form.cleaned_data["daydream_prompt"].strip()
+    browser_session_id = _normalize_browser_session_id(request)
 
     try:
         experience = WebResearchNarrativeClient().build_experience(query)
+        livepeer_stream_session = DaydreamClient().create_livepeer_stream_session(prompt)
     except UpstreamServiceError as exc:
         logger.error("Failed to start stream for query '%s': %s", query, exc)
         context["error"] = str(exc)
         logger.error("Returning non-2xx response for start stream upstream failure: status=502")
         return context, 502
+
+    STREAM_SESSIONS[browser_session_id] = StreamSession(
+        session_id=browser_session_id,
+        whip_url=livepeer_stream_session.whip_url,
+        whep_url=livepeer_stream_session.whep_url,
+        output_video_url=livepeer_stream_session.output_video_url,
+    )
+    STREAM_SESSIONS[livepeer_stream_session.session_id] = StreamSession(
+        session_id=livepeer_stream_session.session_id,
+        whip_url=livepeer_stream_session.whip_url,
+        whep_url=livepeer_stream_session.whep_url,
+        output_video_url=livepeer_stream_session.output_video_url,
+    )
 
     context["stream"] = {
         "title": experience.title,
@@ -272,6 +306,6 @@ def _handle_start(
     }
     context["message"] = (
         "PDF found, downloaded, chunked, and prepared for browser TTS. "
-        "The frontend will request a matching stream session when you connect."
+        "The frontend can now reconnect to the matching Livepeer stream session."
     )
     return context, 200
