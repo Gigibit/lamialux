@@ -1,6 +1,7 @@
 from pathlib import Path
 from unittest.mock import patch
 
+import httpx
 from django.test import Client, TestCase
 
 from audiobook.services import (
@@ -82,6 +83,37 @@ class HomeViewTests(TestCase):
             "Please provide both a book query and a prompt",
             status_code=400,
         )
+
+
+    @patch("audiobook.views.httpx.Client")
+    def test_whep_proxy_returns_502_when_upstream_times_out(self, http_client) -> None:
+        STREAM_SESSIONS["abc"] = StreamSession(
+            session_id="abc",
+            whip_url="https://upstream.example/whip",
+            whep_url="https://upstream.example/whep",
+            output_video_url="https://upstream.example/whep",
+        )
+
+        class DummyClient:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+            def request(self, *args, **kwargs):
+                raise httpx.ReadTimeout("timed out")
+
+        http_client.return_value = DummyClient()
+
+        response = self.client.post(
+            "/streams/abc/whep",
+            data="v=0",
+            content_type="application/sdp",
+        )
+
+        self.assertEqual(response.status_code, 502)
+        self.assertContains(response, "WHEP upstream unavailable.", status_code=502)
 
 
 class WebResearchNarrativeClientTests(TestCase):
