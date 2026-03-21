@@ -101,6 +101,35 @@ button:disabled {
 .visualizer-stack {
   margin-top: 16px;
 }
+.canvas-shell {
+  position: relative;
+  margin-top: 16px;
+}
+.canvas-shell canvas {
+  margin-top: 0;
+}
+.canvas-overlay {
+  position: absolute;
+  inset: 24px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 20px 24px;
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(6, 7, 20, 0.08), rgba(6, 7, 20, 0.78));
+  color: #d9e7ff;
+  pointer-events: none;
+}
+.canvas-overlay strong {
+  color: var(--accent);
+  font-size: clamp(1.2rem, 1.4vw, 1.8rem);
+}
+.canvas-overlay span {
+  font-size: clamp(1rem, 1.2vw, 1.3rem);
+  line-height: 1.5;
+  max-width: min(40rem, 100%);
+}
 video,
 canvas {
   width: 100%;
