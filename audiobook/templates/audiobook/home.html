@@ -60,7 +60,6 @@
               <canvas id="theia-canvas" width="1280" height="720"></canvas>
             </div>
           </div>
-          <canvas id="narration-canvas" class="publisher-canvas" width="1280" height="720" aria-hidden="true"></canvas>
           <div class="console-actions">
             <button type="button" id="connect-stream" {% if not stream %}disabled{% endif %}>Connect WHIP/WHEP</button>
             <button type="button" id="play-tts" {% if not stream %}disabled{% endif %}>Read book</button>
@@ -99,7 +98,6 @@
         const stopButton = document.getElementById('stop-tts');
         const connectButton = document.getElementById('connect-stream');
         const statusEl = document.getElementById('stream-status');
-        const canvas = document.getElementById('narration-canvas');
         const animationCanvas = document.getElementById('theia-canvas');
         const video = document.getElementById('whep-player');
         const sessionLabel = document.getElementById('stream-session-label');
@@ -118,9 +116,11 @@
           browserSessionInput.value = browserSessionId;
         }
 
-        if (!playButton || !stopButton || !connectButton || !statusEl || !canvas || !animationCanvas || !video || !sessionLabel) {
+        if (!playButton || !stopButton || !connectButton || !statusEl || !animationCanvas || !video || !sessionLabel) {
           return;
         }
+
+        const logger = window.logger && typeof window.logger.error === 'function' ? window.logger : console;
 
         const streamSession = {
           sessionId: browserSessionId,
@@ -128,7 +128,7 @@
           whepUrl: '',
           outputVideoUrl: '',
         };
-        const canvasContext = canvas.getContext('2d');
+        const animationContext = animationCanvas.getContext('2d');
         const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
         let publisherPc = null;
         let viewerPc = null;
@@ -150,20 +150,20 @@
         };
 
         const drawCanvas = (text) => {
-          canvasContext.fillStyle = '#07111f';
-          canvasContext.fillRect(0, 0, canvas.width, canvas.height);
-          canvasContext.fillStyle = '#6ee7f9';
-          canvasContext.font = 'bold 42px sans-serif';
-          canvasContext.fillText('LamiaLux live PDF reading', 48, 72);
-          canvasContext.fillStyle = '#d9e7ff';
-          canvasContext.font = '28px sans-serif';
+          animationContext.fillStyle = '#07111f';
+          animationContext.fillRect(0, 0, animationCanvas.width, animationCanvas.height);
+          animationContext.fillStyle = '#6ee7f9';
+          animationContext.font = 'bold 42px sans-serif';
+          animationContext.fillText('LamiaLux live PDF reading', 48, 72);
+          animationContext.fillStyle = '#d9e7ff';
+          animationContext.font = '28px sans-serif';
           const words = text.split(' ');
           let line = '';
           let y = 140;
           words.forEach((word) => {
             const testLine = `${line}${word} `;
-            if (canvasContext.measureText(testLine).width > canvas.width - 96) {
-              canvasContext.fillText(line, 48, y);
+            if (animationContext.measureText(testLine).width > animationCanvas.width - 96) {
+              animationContext.fillText(line, 48, y);
               line = `${word} `;
               y += 38;
             } else {
@@ -171,14 +171,14 @@
             }
           });
           if (line) {
-            canvasContext.fillText(line, 48, y);
+            animationContext.fillText(line, 48, y);
           }
         };
 
         const validateStreamSession = () => {
           if (!streamSession.sessionId || !streamSession.whipUrl) {
             const error = new Error('Missing Livepeer session metadata required for WHIP publishing.');
-            console.error('Livepeer session metadata is incomplete:', {
+            logger.error('Livepeer session metadata is incomplete:', {
               browserSessionId,
               normalizedStreamSession: streamSession,
             });
@@ -223,7 +223,7 @@
 
           if (!response.ok) {
             const body = await response.text();
-            console.error('Stream match request failed.', {
+            logger.error('Stream match request failed.', {
               sessionId: streamSession.sessionId,
               status: response.status,
               body,
@@ -293,8 +293,8 @@
           }
 
           await ensureAudioGraph();
-          drawCanvas('Canvas capture ready for WHIP publishing.');
-          const canvasStream = canvas.captureStream(30);
+          drawCanvas('Theia canvas capture ready for WHIP publishing.');
+          const canvasStream = animationCanvas.captureStream(30);
           compositeStream = new MediaStream([
             ...canvasStream.getVideoTracks(),
             ...destination.stream.getAudioTracks(),
@@ -392,7 +392,7 @@
           });
           if (!response.ok) {
             const responseSummary = await summarizeResponse(response);
-            console.error('WHIP publish request returned a non-2xx response.', {
+            logger.error('WHIP publish request returned a non-2xx response.', {
               sessionId: streamSession.sessionId,
               whipUrl,
               localDescriptionLength: publisherPc.localDescription?.sdp?.length || 0,
@@ -477,7 +477,7 @@
 
             const responseSummary = await summarizeResponse(response);
             lastError = new Error(`WHEP connection failed with status ${responseSummary.status}`);
-            console.error('WHEP playback request returned a non-2xx response; retrying with backoff.', {
+            logger.error('WHEP playback request returned a non-2xx response; retrying with backoff.', {
               attempt,
               pollIntervalMs,
               sessionId: streamSession.sessionId,
@@ -490,7 +490,7 @@
             pollIntervalMs = Math.min(pollIntervalMs + 2000, maxPollIntervalMs + 2000);
           }
 
-          console.error('WHEP playback failed after exhausting the configured backoff retries.', {
+          logger.error('WHEP playback failed after exhausting the configured backoff retries.', {
             attempts: attempt,
             sessionId: streamSession.sessionId,
             lastError,
@@ -506,14 +506,14 @@
           connectPromise = (async () => {
             try {
               setStatus('Connecting WHIP/WHEP...');
-              drawCanvas('Preparing Livepeer canvas feed for WHIP...');
+              drawCanvas('Preparing Theia canvas feed for WHIP...');
               await publishWhip();
               setStatus('Canvas feed published through WHIP. Waiting for WHEP playback...');
               await startWhepPlayback();
               streamReady = true;
               setStatus('WHIP/WHEP connected.');
             } catch (error) {
-              console.error('Livepeer connection failed while publishing the canvas feed:', error);
+              logger.error('Livepeer connection failed while publishing the canvas feed:', error);
               setStatus(`Reading locally. Stream connection failed: ${error.message}`);
               throw error;
             } finally {
@@ -554,7 +554,7 @@
 
         playButton.addEventListener('click', async () => {
           if (!items.length) {
-            console.error('Read book requested without prepared chunks.', { hasPreparedStream, sessionId: streamSession.sessionId });
+            logger.error('Read book requested without prepared chunks.', { hasPreparedStream, sessionId: streamSession.sessionId });
             setStatus('No book chunks are available yet. Search and prepare a PDF first.');
             return;
           }
@@ -567,7 +567,7 @@
 
           if (!streamReady) {
             connectStream().catch((error) => {
-              console.error('Streaming setup failed while local TTS continued:', error);
+              logger.error('Streaming setup failed while local TTS continued:', error);
             });
           }
 
@@ -593,13 +593,13 @@
 
         connectButton.addEventListener('click', () => {
           if (!hasPreparedStream) {
-            console.error('Connect stream requested before a stream was prepared.', { sessionId: streamSession.sessionId });
+            logger.error('Connect stream requested before a stream was prepared.', { sessionId: streamSession.sessionId });
             setStatus('Search and prepare a PDF before connecting WHIP/WHEP.');
             return;
           }
           connectStream();
         });
-        drawCanvas(hasPreparedStream ? 'Ready to read the downloaded PDF.' : 'Canvas ready. Search and prepare a PDF to start streaming.');
+        drawCanvas(hasPreparedStream ? 'Ready to read the downloaded PDF on the published Theia canvas.' : 'Theia canvas ready. Search and prepare a PDF to start streaming.');
       })();
     </script>
     <script src="{% static 'audiobook/caos.js' %}"></script>
