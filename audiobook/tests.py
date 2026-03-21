@@ -1,7 +1,7 @@
 from pathlib import Path
 from unittest.mock import patch
 
-from django.test import Client, TestCase, override_settings
+from django.test import Client, TestCase
 
 from audiobook.services import (
     DaydreamClient,
@@ -14,74 +14,29 @@ from audiobook.views import STREAM_SESSIONS
 
 
 class HomeViewTests(TestCase):
+    def setUp(self) -> None:
+        self.client = Client()
+        STREAM_SESSIONS.clear()
+
     def test_static_stylesheet_serves_css_content_type(self) -> None:
         response = self.client.get("/static/audiobook/style.css")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response["Content-Type"].split(";")[0], "text/css")
 
-    def setUp(self) -> None:
-        self.client = Client()
-
     def test_home_renders(self) -> None:
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
 
     @patch("audiobook.views.DaydreamClient.create_livepeer_stream_session")
-    @patch("audiobook.views.StorytelClient.find_audiobook")
-    def test_start_stream_success(self, find_audiobook, start_stream) -> None:
-        find_audiobook.return_value = type(
-            "Book",
-            (),
-            {
-                "title": "Book",
-                "author": "Author",
-                "stream_url": "http://audio",
-                "cover_url": "",
-            },
-        )()
-        start_stream.return_value = StreamSession(
-            session_id="abc",
-            whip_url="https://upstream.example/whip",
-            whep_url="https://upstream.example/whep",
-            output_video_url="https://upstream.example/whep",
-        )
-
-        response = self.client.post(
-            "/",
-            {"action": "start", "book_query": "Dune", "daydream_prompt": ""},
-        )
-
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Stream initialized")
-        self.assertContains(response, "/streams/abc/whep")
-
-    @patch(
-        "audiobook.views.StorytelClient.find_audiobook",
-        side_effect=UpstreamServiceError("boom"),
-    )
-    def test_start_stream_error(self, _mock_find) -> None:
-        response = self.client.post(
-            "/",
-            {"action": "start", "book_query": "Dune", "daydream_prompt": ""},
-        )
-        self.assertEqual(response.status_code, 502)
-        self.assertContains(response, "boom", status_code=502)
-
-    @override_settings()
-    @patch.dict("os.environ", {"NARRATIVE_MODE_PROVIDER": "WEB_RESEARCH_TTS"}, clear=False)
-    @patch("audiobook.views.DaydreamClient.create_livepeer_stream_session")
     @patch("audiobook.views.WebResearchNarrativeClient.build_experience")
-    def test_start_web_research_mode_success(self, build_experience, start_stream) -> None:
+    def test_start_stream_success(self, build_experience, start_stream) -> None:
         build_experience.return_value = type(
             "Experience",
             (),
             {
                 "title": "Dune · Chapter 1",
-                "author": "Web research PDF",
-                "cover_url": "",
-                "audio_stream_url": "http://tts",
-                "summary": "summary",
+                "author": "PDF source",
                 "pdf_url": "http://example.com/dune.pdf",
                 "storage_path": "storage/web.sqlite3",
                 "chunks": [
@@ -89,7 +44,6 @@ class HomeViewTests(TestCase):
                         chapter_title="Chapter 1",
                         chunk_index=1,
                         text="Fear is the mind killer.",
-                        prompt="Dream a desert storm.",
                     )
                 ],
             },
@@ -101,19 +55,30 @@ class HomeViewTests(TestCase):
             output_video_url="https://upstream.example/whep",
         )
 
-        response = self.client.post(
-            "/", {"action": "start", "book_query": "Dune", "daydream_prompt": ""}
-        )
+        response = self.client.post("/", {"book_query": "Dune", "daydream_prompt": "desert storm"})
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Web research narrative initialized")
-        self.assertContains(response, "Open sourced PDF")
+        self.assertContains(response, "PDF found, downloaded, chunked")
+        self.assertContains(response, "Open downloaded PDF source")
         self.assertContains(response, "Fear is the mind killer")
 
-    def test_invalid_action_returns_400(self) -> None:
-        response = self.client.post("/", {"action": "nope"})
+    @patch(
+        "audiobook.views.WebResearchNarrativeClient.build_experience",
+        side_effect=UpstreamServiceError("boom"),
+    )
+    def test_start_stream_error(self, _mock_find) -> None:
+        response = self.client.post("/", {"book_query": "Dune", "daydream_prompt": "desert storm"})
+        self.assertEqual(response.status_code, 502)
+        self.assertContains(response, "boom", status_code=502)
+
+    def test_invalid_form_returns_400(self) -> None:
+        response = self.client.post("/", {"book_query": "", "daydream_prompt": ""})
         self.assertEqual(response.status_code, 400)
-        self.assertContains(response, "Invalid action requested", status_code=400)
+        self.assertContains(
+            response,
+            "Please provide both a book query and a prompt",
+            status_code=400,
+        )
 
 
 class WebResearchNarrativeClientTests(TestCase):
@@ -138,7 +103,6 @@ class WebResearchNarrativeClientTests(TestCase):
                     chapter_title="Chapter 1",
                     chunk_index=1,
                     text="Fear is the mind killer.",
-                    prompt="Dream a desert storm.",
                 )
             ],
         )
@@ -170,10 +134,7 @@ class WebResearchSearchTests(TestCase):
                 return DummyResponse()
 
         with patch("audiobook.services.httpx.Client", DummyClient):
-            self.assertEqual(
-                client._search_pdf("Dune"),
-                "https://example.com/dune.pdf?download=1",
-            )
+            self.assertEqual(client._search_pdf("Dune"), "https://example.com/dune.pdf?download=1")
 
     def test_search_pdf_resolves_duckduckgo_redirect_to_https_pdf(self) -> None:
         client = WebResearchNarrativeClient()
@@ -245,13 +206,10 @@ class DaydreamClientTests(TestCase):
 
         dummy_http_client = DummyHttpClient()
         with patch("audiobook.services.httpx.Client", return_value=dummy_http_client):
-            stream = client.start_canvas_stream(
-                audio_stream_url="https://audio.example/live",
-                prompt="Dreamy skyline",
-            )
+            stream = client.create_livepeer_stream_session(prompt="Dreamy skyline")
 
-        self.assertEqual(stream["session_id"], "stream-123")
-        self.assertEqual(stream["output_video_url"], "https://video.example/stream")
+        self.assertEqual(stream.session_id, "stream-123")
+        self.assertEqual(stream.output_video_url, "https://video.example/stream")
         self.assertEqual(dummy_http_client.last_call[0], "https://api.daydream.live/v1/streams")
         self.assertEqual(
             dummy_http_client.last_call[2],
@@ -264,185 +222,4 @@ class DaydreamClientTests(TestCase):
                 "name": "LamiaLux stream",
                 "input_type": "whip",
             },
-        )
-
-    def test_update_prompt_uses_v1_endpoint_and_payload(self) -> None:
-        client = DaydreamClient()
-
-        class DummyResponse:
-            def raise_for_status(self) -> None:
-                return None
-
-        class DummyHttpClient:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, exc_type, exc, tb) -> None:
-                return None
-
-            def patch(self, url, headers, json):
-                self.last_call = (url, headers, json)
-                return DummyResponse()
-
-        dummy_http_client = DummyHttpClient()
-        with patch("audiobook.services.httpx.Client", return_value=dummy_http_client):
-            client.update_prompt(session_id="stream-123", prompt="Neon rain")
-
-        self.assertEqual(dummy_http_client.last_call[0], "https://api.daydream.live/v1/streams/stream-123")
-        self.assertEqual(
-            dummy_http_client.last_call[2],
-            {
-                "pipeline": "streamdiffusion",
-                "params": {"prompt": "Neon rain"},
-            },
-        )
-
-    @patch.dict(
-        "os.environ",
-        {
-            "DAYDREAM_BASE_URL": "https://app.daydream.live",
-            "DAYDREAM_CANVAS_STREAM_PATH": "/api/canvas/streams",
-            "DAYDREAM_PROMPT_UPDATE_PATH_TEMPLATE": "/api/canvas/streams/{session_id}/prompt",
-        },
-        clear=False,
-    )
-    def test_legacy_daydream_env_values_are_mapped_to_supported_api_routes(self) -> None:
-        client = DaydreamClient()
-
-        class DummyResponse:
-            def raise_for_status(self) -> None:
-                return None
-
-            def json(self) -> dict[str, str]:
-                return {
-                    "id": "stream-legacy",
-                    "whip_url": "https://video.example/whip-legacy",
-                    "whep_url": "https://video.example/legacy",
-                }
-
-        class DummyHttpClient:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, exc_type, exc, tb) -> None:
-                return None
-
-            def post(self, url, headers, json):
-                self.post_call = (url, headers, json)
-                return DummyResponse()
-
-            def patch(self, url, headers, json):
-                self.patch_call = (url, headers, json)
-                return DummyResponse()
-
-        dummy_http_client = DummyHttpClient()
-        with (
-            patch("audiobook.services.httpx.Client", return_value=dummy_http_client),
-            self.assertLogs("audiobook", level="ERROR") as logs,
-        ):
-            stream = client.start_canvas_stream(
-                audio_stream_url="https://audio.example/live",
-                prompt="Dreamy skyline",
-            )
-            client.update_prompt(session_id=stream["session_id"], prompt="Neon rain")
-
-        self.assertEqual(dummy_http_client.post_call[0], "https://api.daydream.live/v1/streams")
-        self.assertEqual(
-            dummy_http_client.patch_call[0],
-            "https://api.daydream.live/v1/streams/stream-legacy",
-        )
-        self.assertTrue(
-            any("DAYDREAM_BASE_URL is set to legacy host" in message for message in logs.output)
-        )
-        self.assertTrue(
-            any(
-                "DAYDREAM_CANVAS_STREAM_PATH is set to legacy path" in message
-                for message in logs.output
-            )
-        )
-        self.assertTrue(
-            any(
-                "DAYDREAM_PROMPT_UPDATE_PATH_TEMPLATE is set to legacy path" in message
-                for message in logs.output
-            )
-        )
-
-
-class StreamProxyViewTests(TestCase):
-    def setUp(self) -> None:
-        self.client = Client()
-        STREAM_SESSIONS.clear()
-        STREAM_SESSIONS["abc"] = StreamSession(
-            session_id="abc",
-            whip_url="https://upstream.example/whip",
-            whep_url="https://upstream.example/whep",
-            output_video_url="https://upstream.example/whep",
-        )
-
-    def test_stream_session_returns_local_proxy_urls(self) -> None:
-        response = self.client.get("/streams/abc")
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["sessionId"], "abc")
-        self.assertTrue(response.json()["whipUrl"].endswith("/streams/abc/whip"))
-        self.assertTrue(response.json()["whepUrl"].endswith("/streams/abc/whep"))
-
-    @patch("audiobook.views.httpx.Client")
-    def test_whip_proxy_updates_whep_url(self, httpx_client) -> None:
-        class DummyResponse:
-            status_code = 201
-            text = "answer-sdp"
-            headers = {
-                "content-type": "application/sdp",
-                "livepeer-playback-url": "https://upstream.example/whep-playback",
-            }
-
-        class DummyClient:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, exc_type, exc, tb) -> None:
-                return None
-
-            def post(self, *args, **kwargs):
-                return DummyResponse()
-
-        httpx_client.return_value = DummyClient()
-        response = self.client.post(
-            "/streams/abc/whip",
-            data="v=0",
-            content_type="application/sdp",
-        )
-
-        self.assertEqual(response.status_code, 201)
-        self.assertEqual(response["livepeer-playback-url"].split("/")[-1], "whep")
-        self.assertEqual(STREAM_SESSIONS["abc"].whep_url, "https://upstream.example/whep-playback")
-
-
-
-class HomeViewUnexpectedErrorTests(TestCase):
-    def setUp(self) -> None:
-        self.client = Client()
-
-    @patch(
-        "audiobook.views.WebResearchNarrativeClient.build_experience",
-        side_effect=RuntimeError("unexpected boom"),
-    )
-    @patch.dict("os.environ", {"NARRATIVE_MODE_PROVIDER": "WEB_RESEARCH_TTS"}, clear=False)
-    def test_unexpected_start_error_returns_500(self, _mock_build_experience) -> None:
-        with self.assertLogs("audiobook", level="ERROR") as logs:
-            response = self.client.post(
-                "/", {"action": "start", "book_query": "Dune", "daydream_prompt": ""}
-            )
-
-        self.assertEqual(response.status_code, 500)
-        self.assertContains(response, "An unexpected server error occurred.", status_code=500)
-        self.assertTrue(
-            any("Unhandled error while processing action 'start'" in msg for msg in logs.output)
-        )
-        self.assertTrue(
-            any(
-                "Returning non-2xx response for unhandled server error: status=500" in msg
-                for msg in logs.output
-            )
         )
