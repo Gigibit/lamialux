@@ -64,7 +64,18 @@ class WebResearchNarrativeClient:
             )
             raise UpstreamServiceError("Unable to read usable text from the PDF.")
 
-        self._store_chunks(query=query, pdf_url=pdf_url, chunks=chunks)
+        try:
+            self._store_chunks(query=query, pdf_url=pdf_url, chunks=chunks)
+        except sqlite3.Error as exc:
+            logger.error(
+                "Failed to persist narrative chunks for query '%s' and pdf %s: %s",
+                query,
+                pdf_url,
+                exc,
+                exc_info=True,
+            )
+            raise UpstreamServiceError("Unable to store the extracted narrative chunks.") from exc
+
         return NarrativeExperience(
             title=self._derive_title(query, chunks),
             author="PDF source",
@@ -236,38 +247,75 @@ class WebResearchNarrativeClient:
     def _store_chunks(self, query: str, pdf_url: str, chunks: list[NarrativeChunk]) -> None:
         self.sqlite_path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(self.sqlite_path) as connection:
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS narrative_chunks (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    query TEXT NOT NULL,
-                    pdf_url TEXT NOT NULL,
-                    chapter_title TEXT NOT NULL,
-                    chunk_index INTEGER NOT NULL,
-                    text TEXT NOT NULL
-                )
-                """
-            )
+            self._ensure_narrative_chunks_schema(connection)
+            column_names = self._narrative_chunk_column_names(connection)
+            has_prompt_column = "prompt" in column_names
+
             connection.execute("DELETE FROM narrative_chunks WHERE query = ?", (query,))
-            connection.executemany(
-                """
-                INSERT INTO narrative_chunks (
-                    query, pdf_url, chapter_title, chunk_index, text
-                )
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                [
-                    (
-                        query,
-                        pdf_url,
-                        chunk.chapter_title,
-                        chunk.chunk_index,
-                        chunk.text,
+            if has_prompt_column:
+                connection.executemany(
+                    """
+                    INSERT INTO narrative_chunks (
+                        query, prompt, pdf_url, chapter_title, chunk_index, text
                     )
-                    for chunk in chunks
-                ],
-            )
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            query,
+                            query,
+                            pdf_url,
+                            chunk.chapter_title,
+                            chunk.chunk_index,
+                            chunk.text,
+                        )
+                        for chunk in chunks
+                    ],
+                )
+            else:
+                connection.executemany(
+                    """
+                    INSERT INTO narrative_chunks (
+                        query, pdf_url, chapter_title, chunk_index, text
+                    )
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            query,
+                            pdf_url,
+                            chunk.chapter_title,
+                            chunk.chunk_index,
+                            chunk.text,
+                        )
+                        for chunk in chunks
+                    ],
+                )
             connection.commit()
+
+    def _ensure_narrative_chunks_schema(self, connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS narrative_chunks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                query TEXT NOT NULL,
+                prompt TEXT NOT NULL DEFAULT '',
+                pdf_url TEXT NOT NULL,
+                chapter_title TEXT NOT NULL,
+                chunk_index INTEGER NOT NULL,
+                text TEXT NOT NULL
+            )
+            """
+        )
+        column_names = self._narrative_chunk_column_names(connection)
+        if "prompt" not in column_names:
+            connection.execute(
+                "ALTER TABLE narrative_chunks ADD COLUMN prompt TEXT NOT NULL DEFAULT ''"
+            )
+
+    def _narrative_chunk_column_names(self, connection: sqlite3.Connection) -> set[str]:
+        rows = connection.execute("PRAGMA table_info(narrative_chunks)").fetchall()
+        return {str(row[1]) for row in rows}
 
 
 class DaydreamClient:
