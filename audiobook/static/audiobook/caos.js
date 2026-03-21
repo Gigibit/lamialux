@@ -5,8 +5,14 @@ Lo script di base è quello di Pavel Dobryakov, con l'aggiunta della reattività
 
 'use strict';
 
+const logger = window.logger && typeof window.logger.error === 'function' ? window.logger : console;
+
 // Seleziona il canvas in modo più robusto
 const canvas = document.getElementById('theia-canvas') || document.getElementsByTagName('canvas')[0];
+if (!canvas) {
+    logger.error('Caos animation initialization failed because no canvas element was found.');
+    throw new Error('Caos animation requires a canvas element.');
+}
 const DEFAULT_DESKTOP_WIDTH = 960;
 const DEFAULT_DESKTOP_HEIGHT = 540;
 
@@ -155,7 +161,14 @@ let nextDragTime = 0;
 let audioPointer = new pointerPrototype();
 pointers.push(audioPointer);
 
-const { gl, ext } = getWebGLContext(canvas);
+const webGLContext = getWebGLContext(canvas);
+if (!webGLContext) {
+    logger.error('Caos animation initialization failed because WebGL is unavailable for the target canvas.', {
+        canvasId: canvas.id || null
+    });
+    throw new Error('Unable to initialize the Caos WebGL context.');
+}
+const { gl, ext } = webGLContext;
 
 
 if (!ext.supportLinearFiltering) {
@@ -168,12 +181,24 @@ if (!ext.supportLinearFiltering) {
 // Inizializziamo la GUI e l'audio
 //startGUI();
 function getWebGLContext(canvas) {
+    if (!canvas) {
+        logger.error('getWebGLContext called without a canvas instance.');
+        return null;
+    }
+
     const params = { alpha: true, depth: false, stencil: false, antialias: false, preserveDrawingBuffer: false };
 
     let gl = canvas.getContext('webgl2', params);
     const isWebGL2 = !!gl;
     if (!isWebGL2)
         gl = canvas.getContext('webgl', params) || canvas.getContext('experimental-webgl', params);
+
+    if (!gl) {
+        logger.error('Browser returned no WebGL context for the Caos canvas.', {
+            canvasId: canvas.id || null
+        });
+        return null;
+    }
 
     let halfFloat;
     let supportLinearFiltering;

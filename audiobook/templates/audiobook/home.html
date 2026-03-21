@@ -55,9 +55,10 @@
           {% endif %}
           <video id="whep-player" controls autoplay playsinline muted></video>
           <div class="visualizer-stack">
-            <div>
+            <div class="canvas-shell">
               <p class="eyebrow">Caos canvas</p>
               <canvas id="theia-canvas" width="1280" height="720"></canvas>
+              <div class="canvas-overlay" id="theia-canvas-overlay" aria-live="polite"></div>
             </div>
           </div>
           <div class="console-actions">
@@ -99,6 +100,7 @@
         const connectButton = document.getElementById('connect-stream');
         const statusEl = document.getElementById('stream-status');
         const animationCanvas = document.getElementById('theia-canvas');
+        const canvasOverlay = document.getElementById('theia-canvas-overlay');
         const video = document.getElementById('whep-player');
         const sessionLabel = document.getElementById('stream-session-label');
         const items = Array.from(document.querySelectorAll('.chunk-list li'));
@@ -116,11 +118,13 @@
           browserSessionInput.value = browserSessionId;
         }
 
-        if (!playButton || !stopButton || !connectButton || !statusEl || !animationCanvas || !video || !sessionLabel) {
+        if (!playButton || !stopButton || !connectButton || !statusEl || !animationCanvas || !canvasOverlay || !video || !sessionLabel) {
           return;
         }
 
         const logger = window.logger && typeof window.logger.error === 'function' ? window.logger : console;
+
+        canvasOverlay.textContent = 'Theia canvas booting…';
 
         const streamSession = {
           sessionId: browserSessionId,
@@ -128,7 +132,6 @@
           whepUrl: '',
           outputVideoUrl: '',
         };
-        const animationContext = animationCanvas.getContext('2d');
         const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
         let publisherPc = null;
         let viewerPc = null;
@@ -150,29 +153,7 @@
         };
 
         const drawCanvas = (text) => {
-          animationContext.fillStyle = '#07111f';
-          animationContext.fillRect(0, 0, animationCanvas.width, animationCanvas.height);
-          animationContext.fillStyle = '#6ee7f9';
-          animationContext.font = 'bold 42px sans-serif';
-          animationContext.fillText('LamiaLux live PDF reading', 48, 72);
-          animationContext.fillStyle = '#d9e7ff';
-          animationContext.font = '28px sans-serif';
-          const words = text.split(' ');
-          let line = '';
-          let y = 140;
-          words.forEach((word) => {
-            const testLine = `${line}${word} `;
-            if (animationContext.measureText(testLine).width > animationCanvas.width - 96) {
-              animationContext.fillText(line, 48, y);
-              line = `${word} `;
-              y += 38;
-            } else {
-              line = testLine;
-            }
-          });
-          if (line) {
-            animationContext.fillText(line, 48, y);
-          }
+          canvasOverlay.textContent = text;
         };
 
         const validateStreamSession = () => {
