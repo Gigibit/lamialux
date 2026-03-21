@@ -105,8 +105,10 @@
           outputVideoUrl: rawStreamSession.outputVideoUrl || rawStreamSession.output_video_url,
         };
         const canvasContext = canvas.getContext('2d');
+        const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
         let publisherPc = null;
         let viewerPc = null;
+        let whepResourceUrl = null;
         let currentIndex = 0;
         let cancelled = false;
         let animationFrameId = null;
@@ -149,29 +151,6 @@
           }
         };
 
-        const ensureCompositeStream = async () => {
-          if (compositeStream) {
-            return compositeStream;
-          }
-          audioContext = new AudioContext();
-          destination = audioContext.createMediaStreamDestination();
-          gainNode = audioContext.createGain();
-          gainNode.gain.value = 0.03;
-          oscillator = audioContext.createOscillator();
-          oscillator.type = 'sine';
-          oscillator.frequency.value = 220;
-          oscillator.connect(gainNode);
-          gainNode.connect(destination);
-          oscillator.start();
-
-          const canvasStream = canvas.captureStream(24);
-          compositeStream = new MediaStream([
-            ...canvasStream.getVideoTracks(),
-            ...destination.stream.getAudioTracks(),
-          ]);
-          return compositeStream;
-        };
-
         const validateStreamSession = () => {
           if (!streamSession.sessionId || !streamSession.whipUrl || !streamSession.whepUrl) {
             const error = new Error('Missing Livepeer session metadata required for WHIP/WHEP.');
@@ -184,6 +163,66 @@
         };
 
         const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+        const closePeerConnection = (peerConnection) => {
+          if (!peerConnection) {
+            return;
+          }
+          peerConnection.close();
+        };
+
+        const waitForIceGatheringComplete = (peerConnection) => new Promise((resolve) => {
+          if (peerConnection.iceGatheringState === 'complete') {
+            resolve();
+            return;
+          }
+
+          const onStateChange = () => {
+            if (peerConnection.iceGatheringState === 'complete') {
+              peerConnection.removeEventListener('icegatheringstatechange', onStateChange);
+              resolve();
+            }
+          };
+
+          peerConnection.addEventListener('icegatheringstatechange', onStateChange);
+        });
+
+        const ensureAudioGraph = async () => {
+          if (audioContext) {
+            if (audioContext.state === 'suspended') {
+              await audioContext.resume();
+            }
+            return;
+          }
+
+          audioContext = new AudioContext();
+          destination = audioContext.createMediaStreamDestination();
+          gainNode = audioContext.createGain();
+          gainNode.gain.value = 0.03;
+          oscillator = audioContext.createOscillator();
+          oscillator.type = 'sine';
+          oscillator.frequency.value = 220;
+          oscillator.connect(gainNode);
+          gainNode.connect(destination);
+          oscillator.start();
+          await audioContext.resume();
+        };
+
+        const ensureCompositeStream = async () => {
+          if (compositeStream) {
+            await ensureAudioGraph();
+            return compositeStream;
+          }
+
+          await ensureAudioGraph();
+          drawCanvas('Canvas capture ready for WHIP publishing.');
+          const canvasStream = canvas.captureStream(30);
+          compositeStream = new MediaStream([
+            ...canvasStream.getVideoTracks(),
+            ...destination.stream.getAudioTracks(),
+          ]);
+          return compositeStream;
+        };
 
         const waitForSpeechReady = async () => {
           if (speechReadyPromise) {
@@ -212,13 +251,40 @@
           return speechReadyPromise;
         };
 
+        const handleViewerIceCandidate = async ({ candidate }) => {
+          if (!candidate || !whepResourceUrl) {
+            return;
+          }
+
+          const sdpFragment = `a=${candidate.candidate}
+`;
+          try {
+            await fetch(whepResourceUrl, {
+              method: 'PATCH',
+              headers: {
+                'Content-Type': 'application/trickle-ice-sdpfrag',
+              },
+              body: sdpFragment,
+            });
+          } catch (error) {
+            console.warn('Unable to PATCH WHEP ICE candidate to the proxy resource.', error);
+          }
+        };
+
         const publishWhip = async () => {
           validateStreamSession();
           const stream = await ensureCompositeStream();
-          publisherPc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+          if (publisherPc) {
+            closePeerConnection(publisherPc);
+          }
+          publisherPc = new RTCPeerConnection(rtcConfig);
+          publisherPc.onconnectionstatechange = () => {
+            setStatus(`WHIP publishing connection: ${publisherPc.connectionState}.`);
+          };
           stream.getTracks().forEach((track) => publisherPc.addTrack(track, stream));
           const offer = await publisherPc.createOffer();
           await publisherPc.setLocalDescription(offer);
+          await waitForIceGatheringComplete(publisherPc);
           const response = await fetch(streamSession.whipUrl || `${window.location.origin}/streams/${streamSession.sessionId}/whip`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/sdp' },
@@ -231,15 +297,29 @@
         };
 
         const createViewerPeerConnection = () => {
-          viewerPc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+          viewerPc = new RTCPeerConnection(rtcConfig);
           viewerPc.addTransceiver('video', { direction: 'recvonly' });
           viewerPc.addTransceiver('audio', { direction: 'recvonly' });
+          viewerPc.onicecandidate = handleViewerIceCandidate;
           viewerPc.ontrack = (event) => {
-            if (!video.srcObject) {
-              video.srcObject = event.streams[0];
-            }
+            video.srcObject = event.streams[0];
           };
           return viewerPc;
+        };
+
+        const destroyViewerSession = async () => {
+          if (whepResourceUrl) {
+            try {
+              await fetch(whepResourceUrl, { method: 'DELETE' });
+            } catch (error) {
+              console.warn('Unable to DELETE WHEP resource during cleanup.', error);
+            }
+          }
+          whepResourceUrl = null;
+          if (viewerPc) {
+            viewerPc.close();
+            viewerPc = null;
+          }
         };
 
         const startWhepPlayback = async () => {
@@ -248,12 +328,11 @@
           let lastError;
 
           for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-            if (viewerPc) {
-              viewerPc.close();
-            }
+            await destroyViewerSession();
             const peerConnection = createViewerPeerConnection();
             const offer = await peerConnection.createOffer();
             await peerConnection.setLocalDescription(offer);
+            await waitForIceGatheringComplete(peerConnection);
             const response = await fetch(streamSession.whepUrl || `${window.location.origin}/streams/${streamSession.sessionId}/whep`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/sdp' },
@@ -261,6 +340,8 @@
             });
 
             if (response.ok) {
+              const resourceLocation = response.headers.get('location');
+              whepResourceUrl = resourceLocation ? new URL(resourceLocation, window.location.origin).toString() : null;
               await peerConnection.setRemoteDescription({ type: 'answer', sdp: await response.text() });
               await video.play().catch(() => {});
               return;
@@ -286,14 +367,14 @@
           connectPromise = (async () => {
             try {
               setStatus('Connecting WHIP/WHEP...');
-              drawCanvas('Preparing narration stream...');
+              drawCanvas('Preparing Livepeer canvas feed for WHIP...');
               await publishWhip();
-              setStatus('WHIP connected. Start talking while WHEP comes online...');
+              setStatus('Canvas feed published through WHIP. Waiting for WHEP playback...');
               await startWhepPlayback();
               streamReady = true;
               setStatus('WHIP/WHEP connected.');
             } catch (error) {
-              console.error(error);
+              console.error('Livepeer connection failed while publishing the canvas feed:', error);
               setStatus(`Reading locally. Stream connection failed: ${error.message}`);
               throw error;
             } finally {
@@ -304,10 +385,11 @@
           return connectPromise;
         };
 
-        const updateTone = () => {
+        const updateTone = async () => {
           if (!gainNode || cancelled) {
             return;
           }
+          await ensureAudioGraph();
           gainNode.gain.value = 0.02 + ((currentIndex % 4) * 0.01);
           animationFrameId = window.setTimeout(updateTone, 300);
         };
@@ -355,6 +437,13 @@
             window.clearTimeout(animationFrameId);
           }
           setStatus('Reading stopped.');
+        });
+
+        window.addEventListener('beforeunload', () => {
+          destroyViewerSession();
+          if (publisherPc) {
+            closePeerConnection(publisherPc);
+          }
         });
 
         connectButton.addEventListener('click', connectStream);
