@@ -285,6 +285,72 @@ class DaydreamClientTests(TestCase):
             },
         )
 
+    @patch.dict(
+        "os.environ",
+        {
+            "DAYDREAM_BASE_URL": "https://app.daydream.live",
+            "DAYDREAM_CANVAS_STREAM_PATH": "/api/canvas/streams",
+            "DAYDREAM_PROMPT_UPDATE_PATH_TEMPLATE": "/api/canvas/streams/{session_id}/prompt",
+        },
+        clear=False,
+    )
+    def test_legacy_daydream_env_values_are_mapped_to_supported_api_routes(self) -> None:
+        client = DaydreamClient()
+
+        class DummyResponse:
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> dict[str, str]:
+                return {"id": "stream-legacy", "output_stream_url": "https://video.example/legacy"}
+
+        class DummyHttpClient:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+            def post(self, url, headers, json):
+                self.post_call = (url, headers, json)
+                return DummyResponse()
+
+            def patch(self, url, headers, json):
+                self.patch_call = (url, headers, json)
+                return DummyResponse()
+
+        dummy_http_client = DummyHttpClient()
+        with (
+            patch("audiobook.services.httpx.Client", return_value=dummy_http_client),
+            self.assertLogs("audiobook", level="ERROR") as logs,
+        ):
+            stream = client.start_canvas_stream(
+                audio_stream_url="https://audio.example/live",
+                prompt="Dreamy skyline",
+            )
+            client.update_prompt(session_id=stream["session_id"], prompt="Neon rain")
+
+        self.assertEqual(dummy_http_client.post_call[0], "https://api.daydream.live/v1/streams")
+        self.assertEqual(
+            dummy_http_client.patch_call[0],
+            "https://api.daydream.live/v1/streams/stream-legacy",
+        )
+        self.assertTrue(
+            any("DAYDREAM_BASE_URL is set to legacy host" in message for message in logs.output)
+        )
+        self.assertTrue(
+            any(
+                "DAYDREAM_CANVAS_STREAM_PATH is set to legacy path" in message
+                for message in logs.output
+            )
+        )
+        self.assertTrue(
+            any(
+                "DAYDREAM_PROMPT_UPDATE_PATH_TEMPLATE is set to legacy path" in message
+                for message in logs.output
+            )
+        )
+
 
 class HomeViewUnexpectedErrorTests(TestCase):
     def setUp(self) -> None:

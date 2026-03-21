@@ -27,6 +27,14 @@ python manage.py runserver
 
 Open http://127.0.0.1:8000
 
+The Daydream defaults in `.env.example` target the current API host and endpoints:
+
+- `DAYDREAM_BASE_URL=https://api.daydream.live`
+- `DAYDREAM_CANVAS_STREAM_PATH=/v1/streams`
+- `DAYDREAM_PROMPT_UPDATE_PATH_TEMPLATE=/v1/streams/{session_id}`
+
+Older values such as `https://app.daydream.live` and `/api/canvas/streams` now return 404s for stream creation.
+
 ## Quality checks
 ```bash
 ruff check .

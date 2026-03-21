@@ -370,9 +370,22 @@ class WebResearchNarrativeClient:
 
 class DaydreamClient:
     def __init__(self) -> None:
-        self.base_url = os.getenv("DAYDREAM_BASE_URL", "https://api.daydream.live")
+        self.base_url = self._normalize_base_url(
+            os.getenv("DAYDREAM_BASE_URL", "https://api.daydream.live")
+        )
         self.api_key = os.getenv("DAYDREAM_API_KEY", "")
         self.timeout = float(os.getenv("DAYDREAM_TIMEOUT_SECONDS", "30"))
+
+    def _normalize_base_url(self, base_url: str) -> str:
+        normalized_base_url = base_url.rstrip("/")
+        if normalized_base_url == "https://app.daydream.live":
+            logger.error(
+                "DAYDREAM_BASE_URL is set to legacy host %s; "
+                "using https://api.daydream.live instead.",
+                normalized_base_url,
+            )
+            return "https://api.daydream.live"
+        return normalized_base_url
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
@@ -392,13 +405,27 @@ class DaydreamClient:
         }
 
     def _start_endpoint(self) -> str:
-        return os.getenv("DAYDREAM_CANVAS_STREAM_PATH", "/v1/streams")
+        endpoint = os.getenv("DAYDREAM_CANVAS_STREAM_PATH", "/v1/streams")
+        if endpoint == "/api/canvas/streams":
+            logger.error(
+                "DAYDREAM_CANVAS_STREAM_PATH is set to legacy path %s; using /v1/streams instead.",
+                endpoint,
+            )
+            return "/v1/streams"
+        return endpoint
 
     def _update_endpoint(self, session_id: str) -> str:
         endpoint_template = os.getenv(
             "DAYDREAM_PROMPT_UPDATE_PATH_TEMPLATE",
             "/v1/streams/{session_id}",
         )
+        if endpoint_template == "/api/canvas/streams/{session_id}/prompt":
+            logger.error(
+                "DAYDREAM_PROMPT_UPDATE_PATH_TEMPLATE is set to legacy path %s; "
+                "using /v1/streams/{session_id} instead.",
+                endpoint_template,
+            )
+            endpoint_template = "/v1/streams/{session_id}"
         return endpoint_template.format(session_id=session_id)
 
     def _extract_stream_response(self, data: dict[str, object]) -> dict[str, str]:
