@@ -320,8 +320,14 @@
           }
         };
 
-        const publishWhip = async () => {
+        const hydrateStreamSession = async () => {
+          await ensureStreamMatch();
           validateStreamSession();
+          return streamSession;
+        };
+
+        const publishWhip = async () => {
+          await hydrateStreamSession();
           const stream = await ensureCompositeStream();
           if (publisherPc) {
             closePeerConnection(publisherPc);
@@ -376,7 +382,7 @@
         };
 
         const startWhepPlayback = async () => {
-          validateStreamSession();
+          await hydrateStreamSession();
           const initialPollIntervalMs = 5000;
           const maxPollIntervalMs = 30000;
           let attempt = 0;
