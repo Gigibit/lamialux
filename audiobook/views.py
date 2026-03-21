@@ -143,23 +143,42 @@ def whip_proxy(request: HttpRequest, session_id: str) -> HttpResponse:
     playback_url = upstream.headers.get("livepeer-playback-url") or upstream.headers.get(
         "Livepeer-Playback-Url"
     )
-    if playback_url:
+    if upstream.status_code >= 400:
+        return response
+
+    if not playback_url:
         logger.error(
-            "WHIP upstream returned playback URL '%s' for session '%s'; "
-            "preserving existing WHEP URL '%s'.",
-            playback_url,
+            "WHIP upstream response for session '%s' is missing livepeer-playback-url; "
+            "unable to determine the true WHEP upstream target.",
             session_id,
-            stream.whep_url,
         )
-        STREAM_SESSIONS[session_id] = StreamSession(
-            session_id=stream.session_id,
-            whip_url=stream.whip_url,
-            whep_url=stream.whep_url,
-            output_video_url=playback_url,
+        logger.error(
+            "Returning non-2xx response for missing WHIP playback header: status=502"
         )
-        response["livepeer-playback-url"] = request.build_absolute_uri(
-            f"/streams/{session_id}/whep"
-        )
+        return HttpResponse("WHIP upstream did not provide a playback URL.", status=502)
+
+    updated_stream = StreamSession(
+        session_id=stream.session_id,
+        whip_url=stream.whip_url,
+        whep_url=playback_url,
+        output_video_url=stream.output_video_url or playback_url,
+    )
+    STREAM_SESSIONS[session_id] = updated_stream
+    for candidate_id, candidate_stream in list(STREAM_SESSIONS.items()):
+        if candidate_stream.whip_url == stream.whip_url:
+            STREAM_SESSIONS[candidate_id] = StreamSession(
+                session_id=candidate_stream.session_id,
+                whip_url=candidate_stream.whip_url,
+                whep_url=playback_url,
+                output_video_url=(
+                    candidate_stream.output_video_url
+                    or stream.output_video_url
+                    or playback_url
+                ),
+            )
+    response["livepeer-playback-url"] = request.build_absolute_uri(
+        f"/streams/{session_id}/whep"
+    )
     location = upstream.headers.get("location")
     if location:
         response["location"] = request.build_absolute_uri(f"/streams/{session_id}/whep/resource")
@@ -283,17 +302,20 @@ def _handle_start(
         logger.error("Returning non-2xx response for start stream upstream failure: status=502")
         return context, 502
 
+    initial_output_video_url = (
+        livepeer_stream_session.output_video_url or livepeer_stream_session.whep_url
+    )
     STREAM_SESSIONS[browser_session_id] = StreamSession(
         session_id=browser_session_id,
         whip_url=livepeer_stream_session.whip_url,
-        whep_url=livepeer_stream_session.whep_url,
-        output_video_url=livepeer_stream_session.output_video_url,
+        whep_url="",
+        output_video_url=initial_output_video_url,
     )
     STREAM_SESSIONS[livepeer_stream_session.session_id] = StreamSession(
         session_id=livepeer_stream_session.session_id,
         whip_url=livepeer_stream_session.whip_url,
-        whep_url=livepeer_stream_session.whep_url,
-        output_video_url=livepeer_stream_session.output_video_url,
+        whep_url="",
+        output_video_url=initial_output_video_url,
     )
 
     context["stream"] = {

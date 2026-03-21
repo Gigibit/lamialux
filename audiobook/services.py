@@ -39,7 +39,11 @@ class NarrativeExperience:
 class StreamSession:
     session_id: str
     whip_url: str
+    # True upstream target for POST/PATCH/DELETE /whep requests. This should be
+    # updated from the WHIP response header when the provider exposes playback via
+    # livepeer-playback-url instead of the create-session payload.
     whep_url: str
+    # Optional UI/debug URL returned by the provider create-session payload.
     output_video_url: str
 
 

@@ -171,8 +171,8 @@
         };
 
         const validateStreamSession = () => {
-          if (!streamSession.sessionId || !streamSession.whipUrl || !streamSession.whepUrl) {
-            const error = new Error('Missing Livepeer session metadata required for WHIP/WHEP.');
+          if (!streamSession.sessionId || !streamSession.whipUrl) {
+            const error = new Error('Missing Livepeer session metadata required for WHIP publishing.');
             console.error('Livepeer session metadata is incomplete:', {
               browserSessionId,
               normalizedStreamSession: streamSession,
@@ -326,6 +326,12 @@
           return streamSession;
         };
 
+        const refreshStreamSessionAfterWhip = async () => {
+          await ensureStreamMatch();
+          streamSession.whepUrl = streamSession.whepUrl || `${window.location.origin}/streams/${streamSession.sessionId}/whep`;
+          return streamSession;
+        };
+
         const publishWhip = async () => {
           await hydrateStreamSession();
           const stream = await ensureCompositeStream();
@@ -353,6 +359,7 @@
             throw new Error(`WHIP connection failed with status ${response.status}`);
           }
           await publisherPc.setRemoteDescription({ type: 'answer', sdp: await response.text() });
+          await refreshStreamSessionAfterWhip();
         };
 
         const createViewerPeerConnection = () => {
@@ -382,7 +389,7 @@
         };
 
         const startWhepPlayback = async () => {
-          await hydrateStreamSession();
+          await refreshStreamSessionAfterWhip();
           const initialPollIntervalMs = 5000;
           const maxPollIntervalMs = 30000;
           let attempt = 0;
