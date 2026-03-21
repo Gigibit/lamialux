@@ -203,7 +203,7 @@ class HomeViewTests(TestCase):
         self.assertEqual(response.status_code, 201)
         self.assertEqual(
             STREAM_SESSIONS["abc"].whep_url,
-            "https://ai.livepeer.com/live/video-to-video/stk_123-out/whep",
+            "https://fra-ai-prod-livepeer-ai-gateway-0.livepeer.com/live/video-to-video/stk_123-out/whep",
         )
         self.assertEqual(
             STREAM_SESSIONS["abc"].output_video_url,
@@ -303,9 +303,7 @@ class HomeViewTests(TestCase):
         self.assertEqual(dummy_client.last_call["url"], "https://playback.example/whep/stream")
 
     @patch("audiobook.views.httpx.Client")
-    def test_whep_proxy_falls_back_to_output_video_url_after_stale_candidates(
-        self, http_client
-    ) -> None:
+    def test_whep_proxy_returns_upstream_404_without_fallback(self, http_client) -> None:
         STREAM_SESSIONS["abc"] = StreamSession(
             session_id="abc",
             whip_url="https://upstream.example/whip",
@@ -316,10 +314,9 @@ class HomeViewTests(TestCase):
         )
 
         class DummyResponse:
-            def __init__(self, status_code, text, headers=None):
-                self.status_code = status_code
-                self.text = text
-                self.headers = headers or {"content-type": "application/sdp"}
+            status_code = 404
+            text = "not found"
+            headers = {"content-type": "text/plain"}
 
         class DummyClient:
             def __enter__(self):
@@ -329,13 +326,15 @@ class HomeViewTests(TestCase):
                 return None
 
             def request(self, method, url, headers, content):
-                self.calls.append(url)
-                if "stale-out" in url:
-                    return DummyResponse(404, "not found", {"content-type": "text/plain"})
-                return DummyResponse(200, "v=0", {"content-type": "application/sdp"})
+                self.last_call = {
+                    "method": method,
+                    "url": url,
+                    "headers": headers,
+                    "content": content,
+                }
+                return DummyResponse()
 
         dummy_client = DummyClient()
-        dummy_client.calls = []
         http_client.return_value = dummy_client
 
         response = self.client.post(
@@ -344,63 +343,10 @@ class HomeViewTests(TestCase):
             content_type="application/sdp",
         )
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 404)
         self.assertEqual(
-            dummy_client.calls,
-            [
-                "https://ai.livepeer.com/live/video-to-video/stale-out/whep",
-                "https://fra-ai-prod-livepeer-ai-gateway-0.livepeer.com/live/video-to-video/stale-out/whep",
-                "https://playback.example/whep/stream",
-            ],
-        )
-
-    @patch("audiobook.views.httpx.Client")
-    def test_whep_proxy_falls_back_to_initial_whep_url_after_404(self, http_client) -> None:
-        STREAM_SESSIONS["abc"] = StreamSession(
-            session_id="abc",
-            whip_url="https://upstream.example/whip",
-            whep_url="https://ai.livepeer.com/live/video-to-video/stk_123-out/whep",
-            output_video_url="https://upstream.example/original-output",
-            upstream_stream_id="upstream-abc",
-            initial_whep_url="https://fra-ai-prod-livepeer-ai-gateway-0.livepeer.com/live/video-to-video/stk_123-out/whep",
-        )
-
-        class DummyResponse:
-            def __init__(self, status_code, text, headers=None):
-                self.status_code = status_code
-                self.text = text
-                self.headers = headers or {"content-type": "application/sdp"}
-
-        class DummyClient:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, exc_type, exc, tb) -> None:
-                return None
-
-            def request(self, method, url, headers, content):
-                self.calls.append(url)
-                if "ai.livepeer.com" in url:
-                    return DummyResponse(404, "not found", {"content-type": "text/plain"})
-                return DummyResponse(200, "v=0", {"content-type": "application/sdp"})
-
-        dummy_client = DummyClient()
-        dummy_client.calls = []
-        http_client.return_value = dummy_client
-
-        response = self.client.post(
-            "/streams/abc/whep",
-            data="v=0",
-            content_type="application/sdp",
-        )
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(
-            dummy_client.calls,
-            [
-                "https://ai.livepeer.com/live/video-to-video/stk_123-out/whep",
-                "https://fra-ai-prod-livepeer-ai-gateway-0.livepeer.com/live/video-to-video/stk_123-out/whep",
-            ],
+            dummy_client.last_call["url"],
+            "https://ai.livepeer.com/live/video-to-video/stale-out/whep",
         )
 
     @patch("audiobook.views.httpx.Client")
