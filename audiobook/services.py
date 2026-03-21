@@ -47,6 +47,8 @@ class StreamSession:
     # Optional UI/debug URL returned by the provider create-session payload.
     output_video_url: str
     upstream_stream_id: str = ""
+    # Fallback WHEP URL returned by the original create-stream response.
+    initial_whep_url: str = ""
     # Concrete WHEP resource URL returned by the POST handshake `location` header.
     # When present it must be used for subsequent PATCH/DELETE requests.
     whep_resource_url: str = ""
@@ -428,6 +430,7 @@ class DaydreamClient:
             upstream_stream_id=session_id,
             whip_url=whip_url,
             whep_url=whep_url,
+            initial_whep_url=whep_url,
             whep_resource_url="",
             output_video_url=output_video_url,
         )

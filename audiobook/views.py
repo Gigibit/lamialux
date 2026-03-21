@@ -61,6 +61,32 @@ def _normalize_livepeer_playback_url(playback_url: str) -> str:
     return normalized_url
 
 
+def _gateway_variant_livepeer_playback_url(playback_url: str) -> str:
+    parsed = urlparse(playback_url)
+    if parsed.netloc == "ai.livepeer.com":
+        return urlunparse(parsed._replace(netloc="fra-ai-prod-livepeer-ai-gateway-0.livepeer.com"))
+    if "livepeer-ai-gateway" in parsed.netloc:
+        return playback_url
+    return playback_url
+
+
+def _candidate_whep_urls(stream: StreamSession, method: str) -> list[str]:
+    if method in {"PATCH", "DELETE"} and stream.whep_resource_url:
+        return [stream.whep_resource_url]
+
+    candidates: list[str] = []
+    raw_candidates = [
+        stream.whep_url,
+        _gateway_variant_livepeer_playback_url(stream.whep_url) if stream.whep_url else "",
+        stream.initial_whep_url,
+    ]
+    for candidate in raw_candidates:
+        normalized_candidate = str(candidate or "").strip()
+        if normalized_candidate and normalized_candidate not in candidates:
+            candidates.append(normalized_candidate)
+    return candidates
+
+
 def home(request: HttpRequest) -> HttpResponse:
     context: dict[str, object] = {
         "book_form": BookRequestForm(),
@@ -126,6 +152,7 @@ def stream_match(request: HttpRequest) -> JsonResponse:
             whip_url=matched_session.whip_url,
             whep_url=matched_session.whep_url,
             output_video_url=matched_session.output_video_url,
+            initial_whep_url=matched_session.initial_whep_url,
             whep_resource_url=matched_session.whep_resource_url,
         )
         STREAM_SESSIONS[requested_session_id] = stream
@@ -226,6 +253,7 @@ def whip_proxy(request: HttpRequest, session_id: str) -> HttpResponse:
         whip_url=stream.whip_url,
         whep_url=normalized_playback_url,
         output_video_url=stream.output_video_url or normalized_playback_url,
+        initial_whep_url=stream.initial_whep_url,
     )
     STREAM_SESSIONS[session_id] = updated_stream
     for candidate_id, candidate_stream in list(STREAM_SESSIONS.items()):
@@ -244,6 +272,7 @@ def whip_proxy(request: HttpRequest, session_id: str) -> HttpResponse:
                     or stream.output_video_url
                     or normalized_playback_url
                 ),
+                initial_whep_url=candidate_stream.initial_whep_url or stream.initial_whep_url,
                 whep_resource_url="",
             )
     response["livepeer-playback-url"] = request.build_absolute_uri(
@@ -287,55 +316,90 @@ def whep_resource_proxy(request: HttpRequest, session_id: str) -> HttpResponse:
 
 def _proxy_whep_request(request: HttpRequest, session_id: str, method: str) -> HttpResponse:
     stream = STREAM_SESSIONS[session_id]
-    upstream_url = (
-        stream.whep_resource_url
-        if method in {"PATCH", "DELETE"} and stream.whep_resource_url
-        else stream.whep_url
-    )
+    upstream_candidates = _candidate_whep_urls(stream, method)
     request_context = _request_debug_context(request)
     logger.info(
         "Forwarding WHEP request for session %s using method %s "
-        "with request_context=%s upstream_url=%s",
+        "with request_context=%s upstream_candidates=%s",
         session_id,
         method,
         request_context,
-        upstream_url,
+        upstream_candidates,
     )
 
-    try:
-        with httpx.Client(timeout=WHEP_PROXY_TIMEOUT) as client:
-            upstream = client.request(
-                method,
-                upstream_url,
-                headers={
-                    "Content-Type": request.headers.get(
-                        "Content-Type",
-                        "application/trickle-ice-sdpfrag",
-                    )
-                },
-                content=request.body,
-            )
-    except httpx.HTTPError as exc:
+    if not upstream_candidates:
         logger.error(
-            "WHEP proxy failed for session '%s' using method %s: %s. "
-            "request_context=%s upstream_url=%s timeout=%s",
+            "WHEP request for session '%s' has no upstream candidates. request_context=%s",
+            session_id,
+            request_context,
+        )
+        logger.error("Returning non-2xx response for missing WHEP upstream candidates: status=404")
+        return HttpResponse("WHEP session not found.", status=404)
+
+    upstream: httpx.Response | None = None
+    last_http_error: httpx.HTTPError | None = None
+    upstream_url = upstream_candidates[0]
+    with httpx.Client(timeout=WHEP_PROXY_TIMEOUT) as client:
+        for candidate_url in upstream_candidates:
+            upstream_url = candidate_url
+            try:
+                upstream = client.request(
+                    method,
+                    candidate_url,
+                    headers={
+                        "Content-Type": request.headers.get(
+                            "Content-Type",
+                            "application/trickle-ice-sdpfrag",
+                        )
+                    },
+                    content=request.body,
+                )
+            except httpx.HTTPError as exc:
+                last_http_error = exc
+                logger.error(
+                    "WHEP proxy failed for session '%s' using method %s against candidate %s: %s. "
+                    "request_context=%s timeout=%s",
+                    session_id,
+                    method,
+                    candidate_url,
+                    exc,
+                    request_context,
+                    WHEP_PROXY_TIMEOUT,
+                    exc_info=True,
+                )
+                continue
+
+            logger.info(
+                "WHEP upstream responded for session %s using method %s against candidate %s "
+                "with details=%s",
+                session_id,
+                method,
+                candidate_url,
+                _upstream_debug_context(upstream),
+            )
+            if upstream.status_code == 404 and len(upstream_candidates) > 1:
+                logger.error(
+                    "WHEP upstream returned 404 for session '%s' using method %s "
+                    "against candidate %s. Trying next candidate if available.",
+                    session_id,
+                    method,
+                    candidate_url,
+                )
+                continue
+            break
+
+    if upstream is None:
+        logger.error(
+            "WHEP proxy exhausted upstream candidates for session '%s' using method %s "
+            "without a response. last_error=%s request_context=%s candidates=%s",
             session_id,
             method,
-            exc,
+            last_http_error,
             request_context,
-            upstream_url,
-            WHEP_PROXY_TIMEOUT,
-            exc_info=True,
+            upstream_candidates,
         )
         logger.error("Returning non-2xx response for WHEP upstream failure: status=502")
         return HttpResponse("WHEP upstream unavailable.", status=502)
-
-    logger.info(
-        "WHEP upstream responded for session %s using method %s with details=%s",
-        session_id,
-        method,
-        _upstream_debug_context(upstream),
-    )
 
     response = HttpResponse(
         upstream.text,
@@ -351,6 +415,14 @@ def _proxy_whep_request(request: HttpRequest, session_id: str, method: str) -> H
             upstream.text[:500],
         )
         logger.error(
+            "WHEP upstream candidates attempted for session '%s' using method %s: %s. "
+            "Selected candidate=%s",
+            session_id,
+            method,
+            upstream_candidates,
+            upstream_url,
+        )
+        logger.error(
             "Returning non-2xx response for WHEP upstream status passthrough: status=%s",
             upstream.status_code,
         )
@@ -362,6 +434,7 @@ def _proxy_whep_request(request: HttpRequest, session_id: str, method: str) -> H
             whip_url=stream.whip_url,
             whep_url=stream.whep_url,
             output_video_url=stream.output_video_url,
+            initial_whep_url=stream.initial_whep_url,
             whep_resource_url=location,
         )
         response["location"] = request.build_absolute_uri(f"/streams/{session_id}/whep/resource")
@@ -413,15 +486,17 @@ def _handle_start(
         session_id=browser_session_id,
         upstream_stream_id=livepeer_stream_session.session_id,
         whip_url=livepeer_stream_session.whip_url,
-        whep_url="",
+        whep_url=livepeer_stream_session.whep_url,
         output_video_url=initial_output_video_url,
+        initial_whep_url=livepeer_stream_session.whep_url,
     )
     STREAM_SESSIONS[livepeer_stream_session.session_id] = StreamSession(
         session_id=livepeer_stream_session.session_id,
         upstream_stream_id=livepeer_stream_session.session_id,
         whip_url=livepeer_stream_session.whip_url,
-        whep_url="",
+        whep_url=livepeer_stream_session.whep_url,
         output_video_url=initial_output_video_url,
+        initial_whep_url=livepeer_stream_session.whep_url,
     )
 
     context["stream"] = {
