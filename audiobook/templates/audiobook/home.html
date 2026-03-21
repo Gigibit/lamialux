@@ -97,7 +97,13 @@
           return;
         }
 
-        const streamSession = JSON.parse(streamSessionNode.textContent);
+        const rawStreamSession = JSON.parse(streamSessionNode.textContent);
+        const streamSession = {
+          sessionId: rawStreamSession.sessionId || rawStreamSession.session_id,
+          whipUrl: rawStreamSession.whipUrl || rawStreamSession.whip_url,
+          whepUrl: rawStreamSession.whepUrl || rawStreamSession.whep_url,
+          outputVideoUrl: rawStreamSession.outputVideoUrl || rawStreamSession.output_video_url,
+        };
         const canvasContext = canvas.getContext('2d');
         let publisherPc = null;
         let viewerPc = null;
@@ -163,7 +169,19 @@
           return compositeStream;
         };
 
+        const validateStreamSession = () => {
+          if (!streamSession.sessionId || !streamSession.whipUrl || !streamSession.whepUrl) {
+            const error = new Error('Missing Livepeer session metadata required for WHIP/WHEP.');
+            console.error('Livepeer session metadata is incomplete:', {
+              rawStreamSession,
+              normalizedStreamSession: streamSession,
+            });
+            throw error;
+          }
+        };
+
         const publishWhip = async () => {
+          validateStreamSession();
           const stream = await ensureCompositeStream();
           publisherPc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
           stream.getTracks().forEach((track) => publisherPc.addTrack(track, stream));
@@ -181,6 +199,7 @@
         };
 
         const startWhepPlayback = async () => {
+          validateStreamSession();
           viewerPc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
           viewerPc.addTransceiver('video', { direction: 'recvonly' });
           viewerPc.addTransceiver('audio', { direction: 'recvonly' });
