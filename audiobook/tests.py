@@ -109,6 +109,61 @@ class WebResearchNarrativeClientTests(TestCase):
 
         self.assertTrue(sqlite_path.exists())
 
+    def test_store_chunks_migrates_legacy_prompt_column(self) -> None:
+        import sqlite3
+
+        client = WebResearchNarrativeClient()
+        sqlite_path = Path("/tmp/lamialux-legacy.sqlite3")
+        if sqlite_path.exists():
+            sqlite_path.unlink()
+        client.sqlite_path = sqlite_path
+
+        with sqlite3.connect(sqlite_path) as connection:
+            connection.execute(
+                """
+                CREATE TABLE narrative_chunks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    query TEXT NOT NULL,
+                    prompt TEXT NOT NULL,
+                    pdf_url TEXT NOT NULL,
+                    chapter_title TEXT NOT NULL,
+                    chunk_index INTEGER NOT NULL,
+                    text TEXT NOT NULL
+                )
+                """
+            )
+            connection.commit()
+
+        client._store_chunks(
+            query="dune",
+            pdf_url="http://example.com/dune.pdf",
+            chunks=[
+                NarrativeChunk(
+                    chapter_title="Chapter 1",
+                    chunk_index=1,
+                    text="Fear is the mind killer.",
+                )
+            ],
+        )
+
+        with sqlite3.connect(sqlite_path) as connection:
+            columns = connection.execute("PRAGMA table_info(narrative_chunks)").fetchall()
+            rows = connection.execute(
+                "SELECT query, pdf_url, chapter_title, chunk_index, text FROM narrative_chunks"
+            ).fetchall()
+
+        self.assertNotIn("prompt", [column[1] for column in columns])
+        self.assertEqual(
+            rows,
+            [(
+                "dune",
+                "http://example.com/dune.pdf",
+                "Chapter 1",
+                1,
+                "Fear is the mind killer.",
+            )],
+        )
+
 
 class WebResearchSearchTests(TestCase):
     def test_search_pdf_returns_url_without_human_repr(self) -> None:
