@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>LamiaLux · PDF Reader Stream</title>
+    <title>LamiaLux · Narrative Stream</title>
     {% load static %}
     <link rel="stylesheet" href="{% static 'audiobook/style.css' %}" />
   </head>
@@ -11,12 +11,12 @@
     <main class="container">
       <section class="hero panel">
         <div>
-          <p class="eyebrow">PDF search · Coqui TTS · Livepeer WHIP/WHEP</p>
+          <p class="eyebrow">Narrative search · Coqui TTS · Livepeer WHIP/WHEP</p>
           <h1>LamiaLux</h1>
           <p class="subtitle">
-            Search for a book PDF, download it, read it with Coqui text-to-speech,
-            stream the generated narration, and publish the same narration session into
-            Livepeer WHIP while monitoring the WHEP output video.
+            Search for a narrative source, prepare playable media or generated speech,
+            stream the narration, and publish the same session into Livepeer WHIP while
+            monitoring the WHEP output video.
           </p>
         </div>
       </section>
@@ -47,7 +47,7 @@
               <p class="eyebrow">Live output</p>
               <h2>{% if stream %}{{ stream.title }}{% else %}Canvas preview{% endif %}</h2>
             </div>
-            <p class="small" id="stream-session-label">{% if stream %}Session not matched yet.{% else %}Search a PDF to bind this canvas to a stream session.{% endif %}</p>
+            <p class="small" id="stream-session-label">{% if stream %}Session not matched yet.{% else %}Search a narrative source to bind this canvas to a stream session.{% endif %}</p>
           </div>
           <p class="small">{% if stream %}{{ stream.author }}{% else %}The visible canvas is always mounted so the animation surface is available before streaming starts.{% endif %}</p>
           <video id="whep-player" controls autoplay playsinline muted></video>
@@ -66,10 +66,10 @@
             <button type="button" id="play-tts" {% if not stream %}disabled{% endif %}>Read book</button>
             <button type="button" id="stop-tts" class="secondary">Stop</button>
           </div>
-          <p id="stream-status" class="small">{% if stream %}Idle.{% else %}Canvas ready. Search and prepare a stream to enable WHIP/WHEP and TTS controls.{% endif %}</p>
+          <p id="stream-status" class="small">{% if stream %}Idle.{% else %}Canvas ready. Search and prepare a narrative source to enable WHIP/WHEP and TTS controls.{% endif %}</p>
           <p class="small note">
-            Coqui TTS audio is generated on the server and played through the browser audio graph so the
-            narration can be heard locally and embedded into the published WHIP stream.
+            Narration audio is prepared on the server and played through the browser audio graph so the
+            source can be heard locally and embedded into the published WHIP stream.
           </p>
         </article>
 
@@ -86,7 +86,7 @@
               {% endfor %}
             </ol>
           {% else %}
-            <p class="small">No PDF prepared yet. Submit a query to load chunks for Coqui TTS and stream publishing.</p>
+            <p class="small">No narrative source prepared yet. Submit a query to load chunks for playback and stream publishing.</p>
           {% endif %}
         </aside>
       </section>
@@ -165,7 +165,7 @@
           }
           animationOverlay.innerHTML = '';
           const title = document.createElement('strong');
-          title.textContent = 'LamiaLux live PDF reading';
+          title.textContent = 'LamiaLux live narrative reading';
           const body = document.createElement('span');
           body.textContent = text;
           animationOverlay.append(title, body);
@@ -628,7 +628,7 @@
         playButton.addEventListener('click', async () => {
           if (!items.length) {
             logger.error('Read book requested without prepared chunks.', { hasPreparedStream, sessionId: streamSession.sessionId });
-            setStatus('No book chunks are available yet. Search and prepare a PDF first.');
+            setStatus('No book chunks are available yet. Search and prepare a narrative source first.');
             return;
           }
 
@@ -669,12 +669,12 @@
         connectButton.addEventListener('click', () => {
           if (!hasPreparedStream) {
             logger.error('Connect stream requested before a stream was prepared.', { sessionId: streamSession.sessionId });
-            setStatus('Search and prepare a PDF before connecting WHIP/WHEP.');
+            setStatus('Search and prepare a narrative source before connecting WHIP/WHEP.');
             return;
           }
           connectStream();
         });
-        drawCanvas(hasPreparedStream ? 'Ready to read the downloaded PDF on the published Theia canvas.' : 'Theia canvas ready. Search and prepare a PDF to start streaming.');
+        drawCanvas(hasPreparedStream ? 'Ready to play the prepared narrative source on the published Theia canvas.' : 'Theia canvas ready. Search and prepare a narrative source to start streaming.');
       })();
     </script>
 
