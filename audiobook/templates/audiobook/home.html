@@ -6,6 +6,7 @@
     <title>LamiaLux · PDF Reader Stream</title>
     {% load static %}
     <link rel="stylesheet" href="{% static 'audiobook/style.css' %}" />
+    <script href="{% static 'audiobook/caos.js' %}"></script>
   </head>
   <body>
     <main class="container">
@@ -88,7 +89,6 @@
       {% endif %}
     </main>
 
-    <script src="https://raw.githubusercontent.com/Gigibit/ingoya/refs/heads/theia/public/caos.js"></script>
     <script>
       (() => {
         const playButton = document.getElementById('play-tts');
