@@ -1,7 +1,6 @@
 import json
 import logging
 import uuid
-from urllib.parse import urlparse, urlunparse
 
 import httpx
 from django.http import HttpRequest, HttpResponse, JsonResponse
@@ -46,57 +45,10 @@ def _upstream_debug_context(upstream: httpx.Response) -> dict[str, object]:
     }
 
 
-def _normalize_livepeer_playback_url(playback_url: str) -> str:
-    parsed = urlparse(playback_url)
-    if "livepeer-ai-gateway" not in parsed.netloc:
-        return playback_url
-
-    normalized = parsed._replace(netloc="ai.livepeer.com")
-    normalized_url = urlunparse(normalized)
-    logger.info(
-        "Normalized Livepeer playback URL from gateway host to public host: %s -> %s",
-        playback_url,
-        normalized_url,
-    )
-    return normalized_url
-
-
-def _gateway_variant_livepeer_playback_url(playback_url: str) -> str:
-    parsed = urlparse(playback_url)
-    if parsed.netloc == "ai.livepeer.com":
-        return urlunparse(parsed._replace(netloc="fra-ai-prod-livepeer-ai-gateway-0.livepeer.com"))
-    if "livepeer-ai-gateway" in parsed.netloc:
-        return playback_url
-    return playback_url
-
-
-def _expand_whep_candidate_urls(*candidate_urls: str) -> list[str]:
-    candidates: list[str] = []
-    for raw_candidate in candidate_urls:
-        normalized_candidate = str(raw_candidate or "").strip()
-        if not normalized_candidate:
-            continue
-
-        candidate_variants = [
-            normalized_candidate,
-            _normalize_livepeer_playback_url(normalized_candidate),
-            _gateway_variant_livepeer_playback_url(normalized_candidate),
-        ]
-        for candidate_variant in candidate_variants:
-            if candidate_variant and candidate_variant not in candidates:
-                candidates.append(candidate_variant)
-    return candidates
-
-
-def _candidate_whep_urls(stream: StreamSession, method: str) -> list[str]:
+def _whep_upstream_url(stream: StreamSession, method: str) -> str:
     if method in {"PATCH", "DELETE"} and stream.whep_resource_url:
-        return [stream.whep_resource_url]
-
-    return _expand_whep_candidate_urls(
-        stream.whep_url,
-        stream.output_video_url,
-        stream.initial_whep_url,
-    )
+        return stream.whep_resource_url
+    return stream.whep_url
 
 
 def home(request: HttpRequest) -> HttpResponse:
@@ -258,7 +210,7 @@ def whip_proxy(request: HttpRequest, session_id: str) -> HttpResponse:
         )
         return HttpResponse("WHIP upstream did not provide a playback URL.", status=502)
 
-    normalized_playback_url = _normalize_livepeer_playback_url(playback_url)
+    normalized_playback_url = playback_url
     updated_stream = StreamSession(
         session_id=stream.session_id,
         upstream_stream_id=stream.upstream_stream_id or stream.session_id,
@@ -328,90 +280,62 @@ def whep_resource_proxy(request: HttpRequest, session_id: str) -> HttpResponse:
 
 def _proxy_whep_request(request: HttpRequest, session_id: str, method: str) -> HttpResponse:
     stream = STREAM_SESSIONS[session_id]
-    upstream_candidates = _candidate_whep_urls(stream, method)
+    upstream_url = _whep_upstream_url(stream, method)
     request_context = _request_debug_context(request)
     logger.info(
         "Forwarding WHEP request for session %s using method %s "
-        "with request_context=%s upstream_candidates=%s",
+        "with request_context=%s upstream_url=%s",
         session_id,
         method,
         request_context,
-        upstream_candidates,
+        upstream_url,
     )
 
-    if not upstream_candidates:
+    if not upstream_url:
         logger.error(
-            "WHEP request for session '%s' has no upstream candidates. request_context=%s",
+            "WHEP request for session '%s' has no upstream URL. request_context=%s",
             session_id,
             request_context,
         )
-        logger.error("Returning non-2xx response for missing WHEP upstream candidates: status=404")
+        logger.error("Returning non-2xx response for missing WHEP upstream URL: status=404")
         return HttpResponse("WHEP session not found.", status=404)
 
-    upstream: httpx.Response | None = None
-    last_http_error: httpx.HTTPError | None = None
-    upstream_url = upstream_candidates[0]
-    with httpx.Client(timeout=WHEP_PROXY_TIMEOUT) as client:
-        for candidate_url in upstream_candidates:
-            upstream_url = candidate_url
-            try:
-                upstream = client.request(
-                    method,
-                    candidate_url,
-                    headers={
-                        "Content-Type": request.headers.get(
-                            "Content-Type",
-                            "application/trickle-ice-sdpfrag",
-                        )
-                    },
-                    content=request.body,
-                )
-            except httpx.HTTPError as exc:
-                last_http_error = exc
-                logger.error(
-                    "WHEP proxy failed for session '%s' using method %s against candidate %s: %s. "
-                    "request_context=%s timeout=%s",
-                    session_id,
-                    method,
-                    candidate_url,
-                    exc,
-                    request_context,
-                    WHEP_PROXY_TIMEOUT,
-                    exc_info=True,
-                )
-                continue
-
-            logger.info(
-                "WHEP upstream responded for session %s using method %s against candidate %s "
-                "with details=%s",
-                session_id,
+    try:
+        with httpx.Client(timeout=WHEP_PROXY_TIMEOUT) as client:
+            upstream = client.request(
                 method,
-                candidate_url,
-                _upstream_debug_context(upstream),
+                upstream_url,
+                headers={
+                    "Content-Type": request.headers.get(
+                        "Content-Type",
+                        "application/trickle-ice-sdpfrag",
+                    )
+                },
+                content=request.body,
             )
-            if upstream.status_code == 404 and len(upstream_candidates) > 1:
-                logger.error(
-                    "WHEP upstream returned 404 for session '%s' using method %s "
-                    "against candidate %s. Trying next candidate if available.",
-                    session_id,
-                    method,
-                    candidate_url,
-                )
-                continue
-            break
-
-    if upstream is None:
+    except httpx.HTTPError as exc:
         logger.error(
-            "WHEP proxy exhausted upstream candidates for session '%s' using method %s "
-            "without a response. last_error=%s request_context=%s candidates=%s",
+            "WHEP proxy failed for session '%s' using method %s against upstream %s: %s. "
+            "request_context=%s timeout=%s",
             session_id,
             method,
-            last_http_error,
+            upstream_url,
+            exc,
             request_context,
-            upstream_candidates,
+            WHEP_PROXY_TIMEOUT,
+            exc_info=True,
         )
         logger.error("Returning non-2xx response for WHEP upstream failure: status=502")
         return HttpResponse("WHEP upstream unavailable.", status=502)
+
+    logger.info(
+        "WHEP upstream responded for session %s using method %s against upstream %s "
+        "with details=%s",
+        session_id,
+        method,
+        upstream_url,
+        _upstream_debug_context(upstream),
+    )
 
     response = HttpResponse(
         upstream.text,
@@ -425,14 +349,6 @@ def _proxy_whep_request(request: HttpRequest, session_id: str, method: str) -> H
             method,
             upstream.status_code,
             upstream.text[:500],
-        )
-        logger.error(
-            "WHEP upstream candidates attempted for session '%s' using method %s: %s. "
-            "Selected candidate=%s",
-            session_id,
-            method,
-            upstream_candidates,
-            upstream_url,
         )
         logger.error(
             "Returning non-2xx response for WHEP upstream status passthrough: status=%s",
