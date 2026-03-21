@@ -115,6 +115,9 @@
         let gainNode = null;
         let oscillator = null;
         let compositeStream = null;
+        let connectPromise = null;
+        let streamReady = false;
+        let speechReadyPromise = null;
 
         const setStatus = (message) => {
           statusEl.textContent = message;
@@ -181,6 +184,33 @@
         };
 
         const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+        const waitForSpeechReady = async () => {
+          if (speechReadyPromise) {
+            return speechReadyPromise;
+          }
+
+          speechReadyPromise = new Promise((resolve) => {
+            const synth = window.speechSynthesis;
+            const complete = () => {
+              synth.removeEventListener('voiceschanged', complete);
+              window.clearTimeout(fallbackTimeoutId);
+              resolve();
+            };
+
+            const existingVoices = synth.getVoices();
+            if (existingVoices.length) {
+              resolve();
+              return;
+            }
+
+            const fallbackTimeoutId = window.setTimeout(resolve, 250);
+            synth.addEventListener('voiceschanged', complete, { once: true });
+            synth.getVoices();
+          });
+
+          return speechReadyPromise;
+        };
 
         const publishWhip = async () => {
           validateStreamSession();
@@ -249,17 +279,29 @@
         };
 
         const connectStream = async () => {
-          try {
-            setStatus('Connecting WHIP/WHEP...');
-            drawCanvas('Preparing narration stream...');
-            await publishWhip();
-            setStatus('WHIP connected. Start talking while WHEP comes online...');
-            await startWhepPlayback();
-            setStatus('WHIP/WHEP connected.');
-          } catch (error) {
-            console.error(error);
-            setStatus(error.message);
+          if (connectPromise) {
+            return connectPromise;
           }
+
+          connectPromise = (async () => {
+            try {
+              setStatus('Connecting WHIP/WHEP...');
+              drawCanvas('Preparing narration stream...');
+              await publishWhip();
+              setStatus('WHIP connected. Start talking while WHEP comes online...');
+              await startWhepPlayback();
+              streamReady = true;
+              setStatus('WHIP/WHEP connected.');
+            } catch (error) {
+              console.error(error);
+              setStatus(`Reading locally. Stream connection failed: ${error.message}`);
+              throw error;
+            } finally {
+              connectPromise = null;
+            }
+          })();
+
+          return connectPromise;
         };
 
         const updateTone = () => {
@@ -291,12 +333,17 @@
 
         playButton.addEventListener('click', async () => {
           cancelled = false;
+          await waitForSpeechReady();
           if (audioContext && audioContext.state === 'suspended') {
             await audioContext.resume();
           }
-          if (!publisherPc || !viewerPc) {
-            await connectStream();
+
+          if (!streamReady) {
+            connectStream().catch((error) => {
+              console.error('Streaming setup failed while local TTS continued:', error);
+            });
           }
+
           updateTone();
           speakChunk(0);
         });
