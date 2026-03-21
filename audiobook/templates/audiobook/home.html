@@ -180,6 +180,8 @@
           }
         };
 
+        const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
         const publishWhip = async () => {
           validateStreamSession();
           const stream = await ensureCompositeStream();
@@ -198,8 +200,7 @@
           await publisherPc.setRemoteDescription({ type: 'answer', sdp: await response.text() });
         };
 
-        const startWhepPlayback = async () => {
-          validateStreamSession();
+        const createViewerPeerConnection = () => {
           viewerPc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
           viewerPc.addTransceiver('video', { direction: 'recvonly' });
           viewerPc.addTransceiver('audio', { direction: 'recvonly' });
@@ -208,18 +209,43 @@
               video.srcObject = event.streams[0];
             }
           };
-          const offer = await viewerPc.createOffer();
-          await viewerPc.setLocalDescription(offer);
-          const response = await fetch(streamSession.whepUrl || `${window.location.origin}/streams/${streamSession.sessionId}/whep`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/sdp' },
-            body: viewerPc.localDescription.sdp,
-          });
-          if (!response.ok) {
-            throw new Error(`WHEP connection failed with status ${response.status}`);
+          return viewerPc;
+        };
+
+        const startWhepPlayback = async () => {
+          validateStreamSession();
+          const maxAttempts = 6;
+          let lastError;
+
+          for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+            if (viewerPc) {
+              viewerPc.close();
+            }
+            const peerConnection = createViewerPeerConnection();
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+            const response = await fetch(streamSession.whepUrl || `${window.location.origin}/streams/${streamSession.sessionId}/whep`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/sdp' },
+              body: peerConnection.localDescription.sdp,
+            });
+
+            if (response.ok) {
+              await peerConnection.setRemoteDescription({ type: 'answer', sdp: await response.text() });
+              await video.play().catch(() => {});
+              return;
+            }
+
+            lastError = new Error(`WHEP connection failed with status ${response.status}`);
+            console.warn('WHEP not ready yet; retrying after WHIP has started streaming.', {
+              attempt,
+              status: response.status,
+            });
+            setStatus(`WHIP connected. Waiting for WHEP (${attempt}/${maxAttempts})...`);
+            await sleep(1500);
           }
-          await viewerPc.setRemoteDescription({ type: 'answer', sdp: await response.text() });
-          await video.play().catch(() => {});
+
+          throw lastError;
         };
 
         const connectStream = async () => {
@@ -227,6 +253,7 @@
             setStatus('Connecting WHIP/WHEP...');
             drawCanvas('Preparing narration stream...');
             await publishWhip();
+            setStatus('WHIP connected. Start talking while WHEP comes online...');
             await startWhepPlayback();
             setStatus('WHIP/WHEP connected.');
           } catch (error) {

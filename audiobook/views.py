@@ -17,6 +17,7 @@ from .services import (
 
 logger = logging.getLogger("audiobook")
 STREAM_SESSIONS: dict[str, StreamSession] = {}
+WHEP_PROXY_TIMEOUT = httpx.Timeout(connect=5.0, read=5.0, write=30.0, pool=5.0)
 
 
 def home(request: HttpRequest) -> HttpResponse:
@@ -148,7 +149,7 @@ def whep_resource_proxy(request: HttpRequest, session_id: str) -> HttpResponse:
 def _proxy_whep_request(request: HttpRequest, session_id: str, method: str) -> HttpResponse:
     stream = STREAM_SESSIONS[session_id]
     try:
-        with httpx.Client(timeout=30) as client:
+        with httpx.Client(timeout=WHEP_PROXY_TIMEOUT) as client:
             upstream = client.request(
                 method,
                 stream.whep_url,
@@ -215,6 +216,7 @@ def _handle_start(
     except UpstreamServiceError as exc:
         logger.error("Failed to start stream for query '%s': %s", query, exc)
         context["error"] = str(exc)
+        logger.error("Returning non-2xx response for start stream upstream failure: status=502")
         return context, 502
 
     STREAM_SESSIONS[stream_session.session_id] = stream_session
