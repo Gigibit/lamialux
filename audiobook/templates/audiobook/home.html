@@ -24,6 +24,7 @@
       <section class="panel">
         <form method="post" class="request-form">
           {% csrf_token %}
+          <input type="hidden" name="browser_session_id" id="browser-session-id" />
           <label>
             <span>{{ book_form.book_query.label }}</span>
             {{ book_form.book_query }}
@@ -89,6 +90,7 @@
 
     <script>
       (() => {
+        const browserSessionInput = document.getElementById('browser-session-id');
         const playButton = document.getElementById('play-tts');
         const stopButton = document.getElementById('stop-tts');
         const connectButton = document.getElementById('connect-stream');
@@ -99,13 +101,22 @@
         const sessionLabel = document.getElementById('stream-session-label');
         const items = Array.from(document.querySelectorAll('.chunk-list li'));
 
+        const createBrowserSessionId = () => ((window.crypto && typeof window.crypto.randomUUID === 'function')
+          ? window.crypto.randomUUID()
+          : `session-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+        const storedBrowserSessionId = window.localStorage.getItem('lamialux.browserSessionId');
+        const browserSessionId = storedBrowserSessionId || createBrowserSessionId();
+        if (!storedBrowserSessionId) {
+          window.localStorage.setItem('lamialux.browserSessionId', browserSessionId);
+        }
+        if (browserSessionInput) {
+          browserSessionInput.value = browserSessionId;
+        }
+
         if (!playButton || !stopButton || !connectButton || !statusEl || !canvas || !animationCanvas || !video || !sessionLabel || !items.length) {
           return;
         }
 
-        const browserSessionId = (window.crypto && typeof window.crypto.randomUUID === 'function')
-          ? window.crypto.randomUUID()
-          : `session-${Date.now()}-${Math.random().toString(16).slice(2)}`;
         const streamSession = {
           sessionId: browserSessionId,
           whipUrl: '',
