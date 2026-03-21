@@ -79,6 +79,10 @@ button.secondary {
   color: var(--text);
   border: 1px solid var(--border);
 }
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
 .request-form button { grid-column: 1 / -1; }
 .message { color: var(--accent); }
 .error { color: var(--danger); }
