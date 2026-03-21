@@ -1,6 +1,7 @@
 import json
 import logging
 import uuid
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 from django.http import HttpRequest, HttpResponse, JsonResponse
@@ -43,6 +44,21 @@ def _upstream_debug_context(upstream: httpx.Response) -> dict[str, object]:
         ),
         "body_preview": upstream.text[:500],
     }
+
+
+def _normalize_livepeer_playback_url(playback_url: str) -> str:
+    parsed = urlparse(playback_url)
+    if "livepeer-ai-gateway" not in parsed.netloc:
+        return playback_url
+
+    normalized = parsed._replace(netloc="ai.livepeer.com")
+    normalized_url = urlunparse(normalized)
+    logger.info(
+        "Normalized Livepeer playback URL from gateway host to public host: %s -> %s",
+        playback_url,
+        normalized_url,
+    )
+    return normalized_url
 
 
 def home(request: HttpRequest) -> HttpResponse:
@@ -106,9 +122,11 @@ def stream_match(request: HttpRequest) -> JsonResponse:
         matched_session = next(iter(STREAM_SESSIONS.values()))
         stream = StreamSession(
             session_id=requested_session_id,
+            upstream_stream_id=matched_session.upstream_stream_id or matched_session.session_id,
             whip_url=matched_session.whip_url,
             whep_url=matched_session.whep_url,
             output_video_url=matched_session.output_video_url,
+            whep_resource_url=matched_session.whep_resource_url,
         )
         STREAM_SESSIONS[requested_session_id] = stream
 
@@ -201,24 +219,32 @@ def whip_proxy(request: HttpRequest, session_id: str) -> HttpResponse:
         )
         return HttpResponse("WHIP upstream did not provide a playback URL.", status=502)
 
+    normalized_playback_url = _normalize_livepeer_playback_url(playback_url)
     updated_stream = StreamSession(
         session_id=stream.session_id,
+        upstream_stream_id=stream.upstream_stream_id or stream.session_id,
         whip_url=stream.whip_url,
-        whep_url=playback_url,
-        output_video_url=stream.output_video_url or playback_url,
+        whep_url=normalized_playback_url,
+        output_video_url=stream.output_video_url or normalized_playback_url,
     )
     STREAM_SESSIONS[session_id] = updated_stream
     for candidate_id, candidate_stream in list(STREAM_SESSIONS.items()):
         if candidate_stream.whip_url == stream.whip_url:
             STREAM_SESSIONS[candidate_id] = StreamSession(
                 session_id=candidate_stream.session_id,
+                upstream_stream_id=(
+                    candidate_stream.upstream_stream_id
+                    or stream.upstream_stream_id
+                    or stream.session_id
+                ),
                 whip_url=candidate_stream.whip_url,
-                whep_url=playback_url,
+                whep_url=normalized_playback_url,
                 output_video_url=(
                     candidate_stream.output_video_url
                     or stream.output_video_url
-                    or playback_url
+                    or normalized_playback_url
                 ),
+                whep_resource_url="",
             )
     response["livepeer-playback-url"] = request.build_absolute_uri(
         f"/streams/{session_id}/whep"
@@ -261,6 +287,11 @@ def whep_resource_proxy(request: HttpRequest, session_id: str) -> HttpResponse:
 
 def _proxy_whep_request(request: HttpRequest, session_id: str, method: str) -> HttpResponse:
     stream = STREAM_SESSIONS[session_id]
+    upstream_url = (
+        stream.whep_resource_url
+        if method in {"PATCH", "DELETE"} and stream.whep_resource_url
+        else stream.whep_url
+    )
     request_context = _request_debug_context(request)
     logger.info(
         "Forwarding WHEP request for session %s using method %s "
@@ -268,14 +299,14 @@ def _proxy_whep_request(request: HttpRequest, session_id: str, method: str) -> H
         session_id,
         method,
         request_context,
-        stream.whep_url,
+        upstream_url,
     )
 
     try:
         with httpx.Client(timeout=WHEP_PROXY_TIMEOUT) as client:
             upstream = client.request(
                 method,
-                stream.whep_url,
+                upstream_url,
                 headers={
                     "Content-Type": request.headers.get(
                         "Content-Type",
@@ -292,7 +323,7 @@ def _proxy_whep_request(request: HttpRequest, session_id: str, method: str) -> H
             method,
             exc,
             request_context,
-            stream.whep_url,
+            upstream_url,
             WHEP_PROXY_TIMEOUT,
             exc_info=True,
         )
@@ -325,6 +356,14 @@ def _proxy_whep_request(request: HttpRequest, session_id: str, method: str) -> H
         )
     location = upstream.headers.get("location")
     if location:
+        STREAM_SESSIONS[session_id] = StreamSession(
+            session_id=stream.session_id,
+            upstream_stream_id=stream.upstream_stream_id,
+            whip_url=stream.whip_url,
+            whep_url=stream.whep_url,
+            output_video_url=stream.output_video_url,
+            whep_resource_url=location,
+        )
         response["location"] = request.build_absolute_uri(f"/streams/{session_id}/whep/resource")
     return response
 
@@ -372,12 +411,14 @@ def _handle_start(
     )
     STREAM_SESSIONS[browser_session_id] = StreamSession(
         session_id=browser_session_id,
+        upstream_stream_id=livepeer_stream_session.session_id,
         whip_url=livepeer_stream_session.whip_url,
         whep_url="",
         output_video_url=initial_output_video_url,
     )
     STREAM_SESSIONS[livepeer_stream_session.session_id] = StreamSession(
         session_id=livepeer_stream_session.session_id,
+        upstream_stream_id=livepeer_stream_session.session_id,
         whip_url=livepeer_stream_session.whip_url,
         whep_url="",
         output_video_url=initial_output_video_url,
