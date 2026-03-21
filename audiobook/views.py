@@ -1,19 +1,14 @@
+import json
 import logging
-from dataclasses import asdict
 
 import httpx
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import render
 from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_GET, require_http_methods
+from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
 from .forms import BookRequestForm
-from .services import (
-    DaydreamClient,
-    StreamSession,
-    UpstreamServiceError,
-    WebResearchNarrativeClient,
-)
+from .services import StreamSession, UpstreamServiceError, WebResearchNarrativeClient
 
 logger = logging.getLogger("audiobook")
 STREAM_SESSIONS: dict[str, StreamSession] = {}
@@ -56,6 +51,48 @@ def stream_session(request: HttpRequest, session_id: str) -> JsonResponse:
             "sessionId": stream.session_id,
             "whipUrl": request.build_absolute_uri(f"/streams/{stream.session_id}/whip"),
             "whepUrl": request.build_absolute_uri(f"/streams/{stream.session_id}/whep"),
+        }
+    )
+
+
+@csrf_exempt
+@require_POST
+def stream_match(request: HttpRequest) -> JsonResponse:
+    try:
+        payload = json.loads(request.body.decode("utf-8") or "{}")
+    except json.JSONDecodeError as exc:
+        logger.error("Invalid stream match payload: %s", exc)
+        logger.error("Returning non-2xx response for invalid stream match payload: status=400")
+        return JsonResponse({"error": "Invalid JSON payload."}, status=400)
+
+    requested_session_id = str(payload.get("sessionId") or "").strip()
+    if not requested_session_id:
+        logger.error("Stream match requested without sessionId: payload=%s", payload)
+        logger.error("Returning non-2xx response for missing stream match sessionId: status=400")
+        return JsonResponse({"error": "sessionId is required."}, status=400)
+
+    stream = STREAM_SESSIONS.get(requested_session_id)
+    if stream is None and STREAM_SESSIONS:
+        matched_session = next(iter(STREAM_SESSIONS.values()))
+        stream = StreamSession(
+            session_id=requested_session_id,
+            whip_url=matched_session.whip_url,
+            whep_url=matched_session.whep_url,
+            output_video_url=matched_session.output_video_url,
+        )
+        STREAM_SESSIONS[requested_session_id] = stream
+
+    if stream is None:
+        logger.error("No stream match available for requested session '%s'.", requested_session_id)
+        logger.error("Returning non-2xx response for missing stream match: status=404")
+        return JsonResponse({"error": "No stream match found."}, status=404)
+
+    return JsonResponse(
+        {
+            "sessionId": stream.session_id,
+            "whipUrl": request.build_absolute_uri(f"/streams/{stream.session_id}/whip"),
+            "whepUrl": request.build_absolute_uri(f"/streams/{stream.session_id}/whep"),
+            "outputVideoUrl": stream.output_video_url,
         }
     )
 
@@ -212,19 +249,15 @@ def _handle_start(
 
     try:
         experience = WebResearchNarrativeClient().build_experience(query)
-        stream_session = DaydreamClient().create_livepeer_stream_session(prompt=prompt)
     except UpstreamServiceError as exc:
         logger.error("Failed to start stream for query '%s': %s", query, exc)
         context["error"] = str(exc)
         logger.error("Returning non-2xx response for start stream upstream failure: status=502")
         return context, 502
 
-    STREAM_SESSIONS[stream_session.session_id] = stream_session
     context["stream"] = {
         "title": experience.title,
         "author": experience.author,
-        "video_url": request.build_absolute_uri(f"/streams/{stream_session.session_id}/whep"),
-        "session_id": stream_session.session_id,
         "prompt": prompt,
         "pdf_url": experience.pdf_url,
         "storage_path": experience.storage_path,
@@ -236,16 +269,9 @@ def _handle_start(
             }
             for chunk in experience.chunks
         ],
-        "stream_session": {
-            **asdict(stream_session),
-            "sessionId": stream_session.session_id,
-            "whipUrl": request.build_absolute_uri(f"/streams/{stream_session.session_id}/whip"),
-            "whepUrl": request.build_absolute_uri(f"/streams/{stream_session.session_id}/whep"),
-            "outputVideoUrl": stream_session.output_video_url,
-        },
     }
     context["message"] = (
-        "PDF found, downloaded, chunked, and prepared for browser TTS plus "
-        "Livepeer WHIP/WHEP playback."
+        "PDF found, downloaded, chunked, and prepared for browser TTS. "
+        "The frontend will request a matching stream session when you connect."
     )
     return context, 200
