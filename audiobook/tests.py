@@ -55,6 +55,7 @@ class HomeViewTests(TestCase):
             whip_url="https://video.example/whip",
             whep_url="https://video.example/whep",
             output_video_url="https://video.example/whep",
+            upstream_stream_id="livepeer-123",
         )
         response = self.client.post(
             "/",
@@ -97,7 +98,11 @@ class HomeViewTests(TestCase):
             "https://raw.githubusercontent.com/Gigibit/ingoya/refs/heads/theia/public/caos.js",
         )
         self.assertEqual(STREAM_SESSIONS["browser-uuid"].whip_url, "https://video.example/whip")
-        self.assertEqual(STREAM_SESSIONS["browser-uuid"].whep_url, "")
+        self.assertEqual(STREAM_SESSIONS["browser-uuid"].whep_url, "https://video.example/whep")
+        self.assertEqual(
+            STREAM_SESSIONS["browser-uuid"].initial_whep_url,
+            "https://video.example/whep",
+        )
         self.assertEqual(STREAM_SESSIONS["livepeer-123"].session_id, "livepeer-123")
 
     @patch(
@@ -132,6 +137,7 @@ class HomeViewTests(TestCase):
             whip_url="https://upstream.example/whip",
             whep_url="https://upstream.example/whep",
             output_video_url="https://upstream.example/whep",
+            upstream_stream_id="upstream-abc",
         )
 
         class DummyClient:
@@ -164,6 +170,7 @@ class HomeViewTests(TestCase):
             whip_url="https://upstream.example/whip",
             whep_url="https://upstream.example/whep",
             output_video_url="https://upstream.example/original-output",
+            upstream_stream_id="upstream-abc",
         )
 
         class DummyResponse:
@@ -171,7 +178,7 @@ class HomeViewTests(TestCase):
             text = "v=0"
             headers = {
                 "content-type": "application/sdp",
-                "livepeer-playback-url": "https://playback.example/hls/stream.m3u8",
+                "livepeer-playback-url": "https://fra-ai-prod-livepeer-ai-gateway-0.livepeer.com/live/video-to-video/stk_123-out/whep",
                 "location": "https://upstream.example/whip/resource/123",
             }
 
@@ -196,7 +203,7 @@ class HomeViewTests(TestCase):
         self.assertEqual(response.status_code, 201)
         self.assertEqual(
             STREAM_SESSIONS["abc"].whep_url,
-            "https://playback.example/hls/stream.m3u8",
+            "https://ai.livepeer.com/live/video-to-video/stk_123-out/whep",
         )
         self.assertEqual(
             STREAM_SESSIONS["abc"].output_video_url,
@@ -219,6 +226,7 @@ class HomeViewTests(TestCase):
             whip_url="https://upstream.example/whip",
             whep_url="",
             output_video_url="https://upstream.example/original-output",
+            upstream_stream_id="upstream-abc",
         )
 
         class DummyResponse:
@@ -258,6 +266,7 @@ class HomeViewTests(TestCase):
             whip_url="https://upstream.example/whip",
             whep_url="https://playback.example/whep/stream",
             output_video_url="https://upstream.example/original-output",
+            upstream_stream_id="upstream-abc",
         )
 
         class DummyResponse:
@@ -293,12 +302,109 @@ class HomeViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(dummy_client.last_call["url"], "https://playback.example/whep/stream")
 
+    @patch("audiobook.views.httpx.Client")
+    def test_whep_proxy_falls_back_to_initial_whep_url_after_404(self, http_client) -> None:
+        STREAM_SESSIONS["abc"] = StreamSession(
+            session_id="abc",
+            whip_url="https://upstream.example/whip",
+            whep_url="https://ai.livepeer.com/live/video-to-video/stk_123-out/whep",
+            output_video_url="https://upstream.example/original-output",
+            upstream_stream_id="upstream-abc",
+            initial_whep_url="https://fra-ai-prod-livepeer-ai-gateway-0.livepeer.com/live/video-to-video/stk_123-out/whep",
+        )
+
+        class DummyResponse:
+            def __init__(self, status_code, text, headers=None):
+                self.status_code = status_code
+                self.text = text
+                self.headers = headers or {"content-type": "application/sdp"}
+
+        class DummyClient:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+            def request(self, method, url, headers, content):
+                self.calls.append(url)
+                if "ai.livepeer.com" in url:
+                    return DummyResponse(404, "not found", {"content-type": "text/plain"})
+                return DummyResponse(200, "v=0", {"content-type": "application/sdp"})
+
+        dummy_client = DummyClient()
+        dummy_client.calls = []
+        http_client.return_value = dummy_client
+
+        response = self.client.post(
+            "/streams/abc/whep",
+            data="v=0",
+            content_type="application/sdp",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            dummy_client.calls,
+            [
+                "https://ai.livepeer.com/live/video-to-video/stk_123-out/whep",
+                "https://fra-ai-prod-livepeer-ai-gateway-0.livepeer.com/live/video-to-video/stk_123-out/whep",
+            ],
+        )
+
+    @patch("audiobook.views.httpx.Client")
+    def test_whep_resource_proxy_uses_upstream_resource_location_when_available(
+        self, http_client
+    ) -> None:
+        STREAM_SESSIONS["abc"] = StreamSession(
+            session_id="abc",
+            whip_url="https://upstream.example/whip",
+            whep_url="https://playback.example/whep/stream",
+            output_video_url="https://upstream.example/original-output",
+            upstream_stream_id="upstream-abc",
+            whep_resource_url="https://playback.example/whep/resource/42",
+        )
+
+        class DummyResponse:
+            status_code = 204
+            text = ""
+            headers = {"content-type": "application/trickle-ice-sdpfrag"}
+
+        class DummyClient:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+            def request(self, method, url, headers, content):
+                self.last_call = {
+                    "method": method,
+                    "url": url,
+                    "headers": headers,
+                    "content": content,
+                }
+                return DummyResponse()
+
+        dummy_client = DummyClient()
+        http_client.return_value = dummy_client
+
+        response = self.client.patch(
+            "/streams/abc/whep/resource",
+            data="a=candidate:1 1 UDP 1 127.0.0.1 9000 typ host",
+            content_type="application/trickle-ice-sdpfrag",
+        )
+
+        self.assertEqual(response.status_code, 204)
+        self.assertEqual(dummy_client.last_call["method"], "PATCH")
+        self.assertEqual(dummy_client.last_call["url"], "https://playback.example/whep/resource/42")
+
     def test_stream_match_returns_aliased_existing_stream_for_browser_uuid(self) -> None:
         STREAM_SESSIONS["upstream-abc"] = StreamSession(
             session_id="upstream-abc",
             whip_url="https://upstream.example/whip",
             whep_url="https://upstream.example/whep",
             output_video_url="https://upstream.example/whep",
+            upstream_stream_id="upstream-abc",
         )
 
         response = self.client.post(
@@ -318,6 +424,10 @@ class HomeViewTests(TestCase):
             },
         )
         self.assertEqual(STREAM_SESSIONS["browser-uuid"].whep_url, "https://upstream.example/whep")
+        self.assertEqual(
+            STREAM_SESSIONS["browser-uuid"].initial_whep_url,
+            STREAM_SESSIONS["upstream-abc"].initial_whep_url,
+        )
 
     def test_stream_match_returns_404_without_existing_streams(self) -> None:
         response = self.client.post(
@@ -361,6 +471,7 @@ class HomeViewTests(TestCase):
             whip_url="https://video.example/whip",
             whep_url="https://video.example/whep",
             output_video_url="https://video.example/whep",
+            upstream_stream_id="livepeer-123",
         )
 
         response = self.client.post(
