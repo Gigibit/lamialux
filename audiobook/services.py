@@ -33,6 +33,7 @@ class NarrativeExperience:
     pdf_url: str
     chunks: list[NarrativeChunk]
     storage_path: str
+    cache_hit: bool = False
 
 
 @dataclass
@@ -57,6 +58,11 @@ class WebResearchNarrativeClient:
         self.search_url = os.getenv("WEB_RESEARCH_SEARCH_URL", "https://duckduckgo.com/html/")
 
     def build_experience(self, query: str) -> NarrativeExperience:
+        cached_experience = self._load_cached_experience(query)
+        if cached_experience is not None:
+            logger.info("Using cached narrative chunks for query '%s'.", query)
+            return cached_experience
+
         pdf_url = self._search_pdf(query)
         pdf_bytes = self._download_pdf(pdf_url)
         chunks = self._extract_chunks(pdf_bytes)
@@ -75,6 +81,44 @@ class WebResearchNarrativeClient:
             pdf_url=pdf_url,
             chunks=chunks,
             storage_path=str(self.sqlite_path),
+        )
+
+
+    def _load_cached_experience(self, query: str) -> NarrativeExperience | None:
+        if not self.sqlite_path.exists():
+            return None
+
+        with sqlite3.connect(self.sqlite_path) as connection:
+            self._ensure_chunks_table(connection)
+            rows = connection.execute(
+                """
+                SELECT pdf_url, chapter_title, chunk_index, text
+                FROM narrative_chunks
+                WHERE query = ?
+                ORDER BY chapter_title, chunk_index, id
+                """,
+                (query,),
+            ).fetchall()
+
+        if not rows:
+            return None
+
+        pdf_url = str(rows[0][0])
+        chunks = [
+            NarrativeChunk(
+                chapter_title=str(chapter_title),
+                chunk_index=int(chunk_index),
+                text=str(text),
+            )
+            for _, chapter_title, chunk_index, text in rows
+        ]
+        return NarrativeExperience(
+            title=self._derive_title(query, chunks),
+            author="PDF source",
+            pdf_url=pdf_url,
+            chunks=chunks,
+            storage_path=str(self.sqlite_path),
+            cache_hit=True,
         )
 
     def _search_pdf(self, query: str) -> str:
