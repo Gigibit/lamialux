@@ -6,7 +6,6 @@
     <title>LamiaLux · PDF Reader Stream</title>
     {% load static %}
     <link rel="stylesheet" href="{% static 'audiobook/style.css' %}" />
-    <script href="{% static 'audiobook/caos.js' %}"></script>
   </head>
   <body>
     <main class="container">
@@ -458,5 +457,7 @@
         drawCanvas('Ready to read the downloaded PDF.');
       })();
     </script>
+    <script src="{% static 'audiobook/caos.js' %}"></script>
+
   </body>
 </html>
