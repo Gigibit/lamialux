@@ -522,6 +522,7 @@ def _handle_music_start(
         "cover_image_url": track.cover_image_url,
         "external_url": track.external_url,
         "preview_url": track.preview_url,
+        "spotify_uri": track.spotify_uri,
         "provider": track.provider,
     }
     context["message"] = (
@@ -530,6 +531,28 @@ def _handle_music_start(
     )
     return context, 200
 
+
+
+
+@require_GET
+def spotify_web_playback_token(_request: HttpRequest) -> JsonResponse:
+    playback_token = str(os.getenv("SPOTIFY_WEB_PLAYBACK_ACCESS_TOKEN", "")).strip()
+    if not playback_token:
+        logger.error("Spotify Web Playback SDK token endpoint requested without configured token.")
+        logger.error(
+            "Returning non-2xx response for missing Spotify Web Playback SDK token: status=503"
+        )
+        return JsonResponse(
+            {
+                "error": (
+                    "Spotify Web Playback token is not configured. "
+                    "Set SPOTIFY_WEB_PLAYBACK_ACCESS_TOKEN."
+                )
+            },
+            status=503,
+        )
+
+    return JsonResponse({"access_token": playback_token})
 
 def _store_stream_session(browser_session_id: str, livepeer_stream_session: StreamSession) -> None:
     initial_output_video_url = (
