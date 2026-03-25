@@ -101,8 +101,7 @@ const desktopConfig = {
 
 
 // Uniamo la configurazione di base con quella specifica per il dispositivo
-//let config = { ...baseConfig, ...(mobileCheck ? mobileConfig : desktopConfig) };
-let config = HIGH_CONFIG
+let config = { ...baseConfig, ...(mobileCheck ? mobileConfig : desktopConfig) };
 
 // --- INIZIO CODICE AUDIO INTEGRATO ---
 
@@ -290,7 +289,9 @@ function startGUI() {
 }
 
 function isMobile() {
-    return /Mobi|Android/i.test(navigator.userAgent);
+    const userAgent = navigator.userAgent || navigator.vendor || window.opera || '';
+    const touchCapable = navigator.maxTouchPoints > 1;
+    return /Mobi|Android|iPhone|iPad|iPod|IEMobile|Opera Mini/i.test(userAgent) || touchCapable;
 }
 
 // ... Tutte le altre funzioni dello script originale rimangono invariate ...
