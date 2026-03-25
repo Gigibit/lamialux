@@ -74,6 +74,7 @@
   let spotifyPlayerReadyPromise = null;
   let spotifyDeviceId = "";
   let spotifyAuthorizationCode = new URLSearchParams(window.location.search).get('code') || '';
+  let spotifyAuthorizationState = new URLSearchParams(window.location.search).get('state') || '';
 
   const sentencePool = items
     .flatMap((item) => (item.dataset.text || '').match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [])
@@ -277,6 +278,9 @@
     const tokenEndpointUrl = new URL(spotifyPlaybackTokenEndpoint, window.location.origin);
     if (spotifyAuthorizationCode) {
       tokenEndpointUrl.searchParams.set('code', spotifyAuthorizationCode);
+      if (spotifyAuthorizationState) {
+        tokenEndpointUrl.searchParams.set('state', spotifyAuthorizationState);
+      }
     }
     let response;
     try {
@@ -287,6 +291,20 @@
         spotifyPlaybackTokenEndpoint,
       });
       throw new Error('Spotify token endpoint is unavailable.');
+    }
+
+    if (response.status === 401) {
+      const payload = await response.json().catch((error) => {
+        logger.error('Spotify authorization response could not be parsed as JSON.', { error });
+        throw new Error('Spotify authorization response is invalid JSON.');
+      });
+      const authorizationUrl = String((payload && payload.authorization_url) || '').trim();
+      if (!authorizationUrl) {
+        logger.error('Spotify authorization is required but authorization_url was missing.', { payload });
+        throw new Error('Spotify authorization is required but no authorization URL was provided.');
+      }
+      window.location.assign(authorizationUrl);
+      throw new Error('Redirecting to Spotify authorization.');
     }
 
     if (!response.ok) {
@@ -308,8 +326,10 @@
     }
     if (spotifyAuthorizationCode) {
       spotifyAuthorizationCode = '';
+      spotifyAuthorizationState = '';
       const urlWithoutCode = new URL(window.location.href);
       urlWithoutCode.searchParams.delete('code');
+      urlWithoutCode.searchParams.delete('state');
       window.history.replaceState({}, document.title, urlWithoutCode.toString());
     }
     return accessToken;

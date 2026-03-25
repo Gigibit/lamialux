@@ -3,7 +3,10 @@ import logging
 import os
 import time
 import uuid
+from base64 import urlsafe_b64encode
+from hashlib import sha256
 from pathlib import Path
+from urllib.parse import urlencode, urlparse
 
 import httpx
 from django.http import FileResponse, HttpRequest, HttpResponse, JsonResponse
@@ -31,6 +34,14 @@ BOOK_STREAM_PROMPT_TEMPLATE = (
     "Mouth. Real Representation. {book_title}. REAL, NOT drawn, NOT blurry, "
     "NOT low quality, NOT flat, NOT 2d"
 )
+SPOTIFY_ACCOUNTS_AUTHORIZE_URL = "https://accounts.spotify.com/authorize"
+SPOTIFY_ACCOUNTS_TOKEN_URL = "https://accounts.spotify.com/api/token"
+SPOTIFY_WEB_PLAYBACK_SCOPES = (
+    "streaming",
+    "user-read-email",
+    "user-read-private",
+    "user-modify-playback-state",
+)
 
 
 def _build_book_stream_prompt(book_title: str) -> str:
@@ -50,6 +61,47 @@ def _request_debug_context(request: HttpRequest) -> dict[str, object]:
         "remote_addr": request.META.get("REMOTE_ADDR"),
         "forwarded_for": request.headers.get("X-Forwarded-For"),
     }
+
+
+def _is_valid_spotify_redirect_uri(redirect_uri: str) -> bool:
+    parsed = urlparse(redirect_uri)
+    if parsed.scheme == "https" and parsed.netloc:
+        return True
+    return redirect_uri.startswith("http://127.0.0.1")
+
+
+def _build_spotify_authorization_url(request: HttpRequest) -> str:
+    spotify_client_id = str(os.getenv("SPOTIFY_CLIENT_ID", "")).strip()
+    spotify_redirect_uri = str(os.getenv("SPOTIFY_REDIRECT_URI", "")).strip()
+    if not spotify_client_id:
+        logger.error("Spotify authorization URL requested without SPOTIFY_CLIENT_ID.")
+        raise UpstreamServiceError("Spotify authorization requires SPOTIFY_CLIENT_ID.")
+    if not spotify_redirect_uri or not _is_valid_spotify_redirect_uri(spotify_redirect_uri):
+        logger.error(
+            "Spotify authorization URL requested with invalid SPOTIFY_REDIRECT_URI='%s'.",
+            spotify_redirect_uri,
+        )
+        raise UpstreamServiceError(
+            "SPOTIFY_REDIRECT_URI must use HTTPS (or http://127.0.0.1 for local development)."
+        )
+    state = uuid.uuid4().hex
+    code_verifier = uuid.uuid4().hex + uuid.uuid4().hex
+    challenge_digest = sha256(code_verifier.encode("utf-8")).digest()
+    code_challenge = urlsafe_b64encode(challenge_digest).decode("ascii").rstrip("=")
+    request.session["spotify_oauth_state"] = state
+    request.session["spotify_oauth_code_verifier"] = code_verifier
+    query = urlencode(
+        {
+            "client_id": spotify_client_id,
+            "response_type": "code",
+            "redirect_uri": spotify_redirect_uri,
+            "scope": " ".join(SPOTIFY_WEB_PLAYBACK_SCOPES),
+            "code_challenge_method": "S256",
+            "code_challenge": code_challenge,
+            "state": state,
+        }
+    )
+    return f"{SPOTIFY_ACCOUNTS_AUTHORIZE_URL}?{query}"
 
 
 def _upstream_debug_context(upstream: httpx.Response) -> dict[str, object]:
@@ -560,6 +612,9 @@ def spotify_web_playback_token(request: HttpRequest) -> JsonResponse:
         return JsonResponse({"access_token": session_access_token})
 
     authorization_code = str(request.GET.get("code") or "").strip()
+    authorization_state = str(request.GET.get("state") or "").strip()
+    oauth_state = str(request.session.get("spotify_oauth_state") or "").strip()
+    oauth_code_verifier = str(request.session.get("spotify_oauth_code_verifier") or "").strip()
     session_refresh_token = str(
         request.session.get("spotify_web_playback_refresh_token") or ""
     ).strip()
@@ -568,11 +623,36 @@ def spotify_web_playback_token(request: HttpRequest) -> JsonResponse:
 
     try:
         if authorization_code:
+            if not authorization_state or authorization_state != oauth_state:
+                logger.error(
+                    "Spotify OAuth state validation failed. request_state=%s session_state=%s",
+                    authorization_state,
+                    oauth_state,
+                )
+                logger.error(
+                    "Returning non-2xx response for invalid Spotify OAuth state: status=400"
+                )
+                return JsonResponse(
+                    {"error": "Invalid Spotify OAuth state. Start authorization again."},
+                    status=400,
+                )
+            if not oauth_code_verifier:
+                logger.error(
+                    "Spotify OAuth code exchange requested without code_verifier in session."
+                )
+                logger.error(
+                    "Returning non-2xx response for missing Spotify OAuth code_verifier: status=400"
+                )
+                return JsonResponse(
+                    {"error": "Missing Spotify PKCE verifier. Start authorization again."},
+                    status=400,
+                )
             token_payload = _request_spotify_oauth_token(
                 grant_type="authorization_code",
                 payload={
                     "code": authorization_code,
                     "redirect_uri": str(os.getenv("SPOTIFY_REDIRECT_URI", "")).strip(),
+                    "code_verifier": oauth_code_verifier,
                 },
             )
         elif refresh_token:
@@ -601,12 +681,25 @@ def spotify_web_playback_token(request: HttpRequest) -> JsonResponse:
                     has_redirect_uri,
                     has_refresh_token,
                 )
+                if has_client_id and has_redirect_uri:
+                    authorization_url = _build_spotify_authorization_url(request)
+                    logger.error(
+                        "Returning non-2xx response for Spotify OAuth authorization required: "
+                        "status=401"
+                    )
+                    return JsonResponse(
+                        {
+                            "error": "Spotify authorization is required.",
+                            "authorization_url": authorization_url,
+                        },
+                        status=401,
+                    )
                 return JsonResponse(
                     {
                         "error": (
                             "Spotify Web Playback token is not configured. "
                             "Set SPOTIFY_WEB_PLAYBACK_ACCESS_TOKEN or configure "
-                            "SPOTIFY_CLIENT_ID/SPOTIFY_CLIENT_SECRET with SPOTIFY_REDIRECT_URI."
+                            "SPOTIFY_CLIENT_ID with SPOTIFY_REDIRECT_URI."
                         ),
                         "details": {
                             "has_spotify_client_id": has_client_id,
@@ -647,6 +740,8 @@ def spotify_web_playback_token(request: HttpRequest) -> JsonResponse:
         request.session["spotify_web_playback_refresh_token"] = refresh_token_from_oauth
     elif refresh_token:
         request.session["spotify_web_playback_refresh_token"] = refresh_token
+    request.session.pop("spotify_oauth_state", None)
+    request.session.pop("spotify_oauth_code_verifier", None)
 
     return JsonResponse({"access_token": access_token})
 
@@ -654,14 +749,14 @@ def spotify_web_playback_token(request: HttpRequest) -> JsonResponse:
 def _request_spotify_oauth_token(*, grant_type: str, payload: dict[str, str]) -> dict[str, object]:
     spotify_client_id = str(os.getenv("SPOTIFY_CLIENT_ID", "")).strip()
     spotify_client_secret = str(os.getenv("SPOTIFY_CLIENT_SECRET", "")).strip()
-    if not spotify_client_id or not spotify_client_secret:
+    if not spotify_client_id:
         logger.error(
-            "Spotify OAuth token request attempted without full client credentials for "
+            "Spotify OAuth token request attempted without SPOTIFY_CLIENT_ID for "
             "grant_type=%s",
             grant_type,
         )
         raise UpstreamServiceError(
-            "Spotify OAuth requires SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET."
+            "Spotify OAuth requires SPOTIFY_CLIENT_ID."
         )
 
     if grant_type == "authorization_code" and not payload.get("redirect_uri"):
@@ -669,14 +764,28 @@ def _request_spotify_oauth_token(*, grant_type: str, payload: dict[str, str]) ->
         raise UpstreamServiceError(
             "Spotify OAuth authorization_code requires SPOTIFY_REDIRECT_URI."
         )
+    redirect_uri = str(payload.get("redirect_uri") or "").strip()
+    if grant_type == "authorization_code" and not _is_valid_spotify_redirect_uri(redirect_uri):
+        logger.error(
+            "Spotify OAuth authorization_code exchange attempted with invalid redirect URI '%s'.",
+            redirect_uri,
+        )
+        raise UpstreamServiceError(
+            "SPOTIFY_REDIRECT_URI must use HTTPS (or http://127.0.0.1 for local development)."
+        )
 
     request_payload = {"grant_type": grant_type, **payload}
+    auth: tuple[str, str] | None = None
+    if spotify_client_secret:
+        auth = (spotify_client_id, spotify_client_secret)
+    else:
+        request_payload["client_id"] = spotify_client_id
     try:
         with httpx.Client(timeout=20.0) as client:
             response = client.post(
-                "https://accounts.spotify.com/api/token",
+                SPOTIFY_ACCOUNTS_TOKEN_URL,
                 data=request_payload,
-                auth=(spotify_client_id, spotify_client_secret),
+                auth=auth,
                 headers={"Accept": "application/json"},
             )
     except httpx.HTTPError as exc:

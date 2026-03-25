@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import sqlite3
+import time
 from dataclasses import dataclass
 from html import unescape
 from pathlib import Path
@@ -638,6 +639,7 @@ class MusicSearchClient:
         self.timeout = float(os.getenv("SPOTIFY_TIMEOUT_SECONDS", "20"))
         self.client_id = os.getenv("SPOTIFY_CLIENT_ID", "").strip()
         self.client_secret = os.getenv("SPOTIFY_CLIENT_SECRET", "").strip()
+        self.max_retries = int(os.getenv("SPOTIFY_MAX_RETRIES", "3"))
 
     def search_track(self, query: str) -> MusicExperience:
         if self.provider != "SPOTIFY":
@@ -665,15 +667,16 @@ class MusicSearchClient:
         with httpx.Client(timeout=self.timeout) as client:
             try:
                 logger.info("Requesting Spotify access token from '%s'.", self.SPOTIFY_TOKEN_URL)
-                response = client.post(
-                    self.SPOTIFY_TOKEN_URL,
+                response = self._request_with_backoff(
+                    client=client,
+                    method="POST",
+                    url=self.SPOTIFY_TOKEN_URL,
                     headers={
                         "Authorization": f"Basic {encoded_credentials}",
                         "Content-Type": "application/x-www-form-urlencoded",
                     },
                     data={"grant_type": "client_credentials"},
                 )
-                response.raise_for_status()
             except httpx.HTTPStatusError as exc:
                 logger.error(
                     "Spotify token request failed with status %s: %s",
@@ -699,12 +702,13 @@ class MusicSearchClient:
         with httpx.Client(timeout=self.timeout) as client:
             try:
                 logger.info("Calling Spotify track search for query='%s'.", query)
-                response = client.get(
-                    self.SPOTIFY_SEARCH_URL,
+                response = self._request_with_backoff(
+                    client=client,
+                    method="GET",
+                    url=self.SPOTIFY_SEARCH_URL,
                     headers={"Authorization": f"Bearer {access_token}"},
                     params={"q": query, "type": "track", "limit": 1, "market": "US"},
                 )
-                response.raise_for_status()
             except httpx.HTTPStatusError as exc:
                 logger.error(
                     "Spotify track search failed with status %s for query '%s': %s",
@@ -742,6 +746,42 @@ class MusicSearchClient:
             spotify_uri=str(track.get("uri") or ""),
             provider="SPOTIFY",
         )
+
+    def _request_with_backoff(
+        self, *, client: httpx.Client, method: str, url: str, **kwargs
+    ) -> httpx.Response:
+        attempt = 0
+        while True:
+            response = client.request(method=method, url=url, **kwargs)
+            if response.status_code != 429:
+                response.raise_for_status()
+                return response
+            attempt += 1
+            if attempt > self.max_retries:
+                logger.error(
+                    (
+                        "Spotify request exceeded max retries after 429 responses. "
+                        "method=%s url=%s max_retries=%s"
+                    ),
+                    method,
+                    url,
+                    self.max_retries,
+                )
+                response.raise_for_status()
+            retry_after_raw = str(response.headers.get("Retry-After") or "").strip()
+            retry_after_seconds = int(retry_after_raw) if retry_after_raw.isdigit() else 1
+            backoff_seconds = max(retry_after_seconds, 2 ** (attempt - 1))
+            logger.error(
+                (
+                    "Spotify rate limit encountered (429). Retrying with backoff. "
+                    "method=%s url=%s attempt=%s sleep_seconds=%s"
+                ),
+                method,
+                url,
+                attempt,
+                backoff_seconds,
+            )
+            time.sleep(backoff_seconds)
 class NarrativeModeProvider:
     THIRDY_PARTS_STORYTEL = "THIRDY_PARTS_STORYTEL"
     WEB_RESEARCH_TTS = "WEB_RESEARCH_TTS"

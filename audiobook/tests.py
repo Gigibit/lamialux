@@ -231,7 +231,6 @@ class HomeViewTests(TestCase):
         "os.environ",
         {
             "SPOTIFY_CLIENT_ID": "spotify-client-id",
-            "SPOTIFY_CLIENT_SECRET": "spotify-client-secret",
             "SPOTIFY_REDIRECT_URI": "https://example.com/music",
         },
     )
@@ -267,7 +266,12 @@ class HomeViewTests(TestCase):
         dummy_client = DummyClient()
         http_client.return_value = dummy_client
 
-        response = self.client.get("/spotify/web-playback/token?code=auth-code-123")
+        session = self.client.session
+        session["spotify_oauth_state"] = "state-123"
+        session["spotify_oauth_code_verifier"] = "verifier-123"
+        session.save()
+
+        response = self.client.get("/spotify/web-playback/token?code=auth-code-123&state=state-123")
 
         self.assertEqual(response.status_code, 200)
         self.assertJSONEqual(
@@ -280,9 +284,11 @@ class HomeViewTests(TestCase):
                 "grant_type": "authorization_code",
                 "code": "auth-code-123",
                 "redirect_uri": "https://example.com/music",
+                "code_verifier": "verifier-123",
+                "client_id": "spotify-client-id",
             },
         )
-        self.assertEqual(dummy_client.auth, ("spotify-client-id", "spotify-client-secret"))
+        self.assertIsNone(dummy_client.auth)
         self.assertEqual(
             self.client.session["spotify_web_playback_refresh_token"], "fresh-refresh-token"
         )
@@ -331,8 +337,28 @@ class HomeViewTests(TestCase):
         )
         self.assertEqual(
             dummy_client.data,
-            {"grant_type": "refresh_token", "refresh_token": "saved-refresh-token"},
+            {
+                "grant_type": "refresh_token",
+                "refresh_token": "saved-refresh-token",
+                "client_id": "spotify-client-id",
+            },
         )
+
+    @patch.dict(
+        "os.environ",
+        {
+            "SPOTIFY_CLIENT_ID": "spotify-client-id",
+            "SPOTIFY_REDIRECT_URI": "https://example.com/music",
+        },
+        clear=True,
+    )
+    def test_spotify_web_playback_token_endpoint_returns_authorization_url(self) -> None:
+        response = self.client.get("/spotify/web-playback/token")
+
+        self.assertEqual(response.status_code, 401)
+        payload = json.loads(response.content.decode("utf-8"))
+        self.assertEqual(payload["error"], "Spotify authorization is required.")
+        self.assertIn("authorization_url", payload)
 
     @patch("audiobook.views.httpx.Client")
     def test_whep_proxy_returns_502_when_upstream_times_out(self, http_client) -> None:
