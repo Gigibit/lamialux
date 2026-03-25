@@ -583,12 +583,23 @@ def spotify_web_playback_token(request: HttpRequest) -> JsonResponse:
         else:
             playback_token = str(os.getenv("SPOTIFY_WEB_PLAYBACK_ACCESS_TOKEN", "")).strip()
             if not playback_token:
+                has_client_id = bool(str(os.getenv("SPOTIFY_CLIENT_ID", "")).strip())
+                has_client_secret = bool(
+                    str(os.getenv("SPOTIFY_CLIENT_SECRET", "")).strip()
+                )
+                has_redirect_uri = bool(str(os.getenv("SPOTIFY_REDIRECT_URI", "")).strip())
+                has_refresh_token = bool(refresh_token)
                 logger.error(
                     "Spotify Web Playback SDK token endpoint requested without configured token."
                 )
                 logger.error(
                     "Returning non-2xx response for missing Spotify Web Playback SDK token: "
-                    "status=503"
+                    "status=503 has_client_id=%s has_client_secret=%s "
+                    "has_redirect_uri=%s has_refresh_token=%s",
+                    has_client_id,
+                    has_client_secret,
+                    has_redirect_uri,
+                    has_refresh_token,
                 )
                 return JsonResponse(
                     {
@@ -596,7 +607,13 @@ def spotify_web_playback_token(request: HttpRequest) -> JsonResponse:
                             "Spotify Web Playback token is not configured. "
                             "Set SPOTIFY_WEB_PLAYBACK_ACCESS_TOKEN or configure "
                             "SPOTIFY_CLIENT_ID/SPOTIFY_CLIENT_SECRET with SPOTIFY_REDIRECT_URI."
-                        )
+                        ),
+                        "details": {
+                            "has_spotify_client_id": has_client_id,
+                            "has_spotify_client_secret": has_client_secret,
+                            "has_spotify_redirect_uri": has_redirect_uri,
+                            "has_spotify_refresh_token": has_refresh_token,
+                        },
                     },
                     status=503,
                 )
