@@ -404,7 +404,12 @@
           reject(new Error(`Spotify initialization error: ${message}`));
         });
         player.addListener('authentication_error', ({ message }) => {
-          logger.error('Spotify Web Playback SDK authentication error.', { message });
+          logger.error('Spotify Web Playback SDK authentication error.', {
+            message,
+            requiredScopes: SPOTIFY_REQUIRED_SCOPES,
+            remediation:
+              'Re-authorize Spotify with required Web Playback SDK scopes and request a fresh access token.',
+          });
           reject(new Error(`Spotify authentication error: ${message}`));
         });
         player.addListener('account_error', ({ message }) => {
@@ -425,6 +430,21 @@
       });
     }
     return spotifyPlayerReadyPromise;
+  };
+
+  const SPOTIFY_REQUIRED_SCOPES = [
+    'streaming',
+    'user-read-email',
+    'user-read-private',
+    'user-modify-playback-state',
+  ];
+
+  const isSpotifyInvalidScopesError = (error) => {
+    if (!error) {
+      return false;
+    }
+    const message = String(error && error.message ? error.message : error).toLowerCase();
+    return message.includes('invalid token scopes');
   };
 
   const playSpotifyViaSdk = async () => {
@@ -1128,8 +1148,17 @@
         setStatus(`Playing ${musicTrack.title} by ${musicTrack.artist} using Spotify Web Playback SDK.`);
         return;
       } catch (error) {
-        logger.error('Spotify Web Playback SDK fallback failed to start track playback.', { error, musicTrack });
-        setStatus('Spotify playback is unavailable in-browser for this track. Open it on Spotify instead.');
+        logger.error('Spotify Web Playback SDK fallback failed to start track playback.', {
+          error,
+          musicTrack,
+          isInvalidScopesError: isSpotifyInvalidScopesError(error),
+          requiredScopes: SPOTIFY_REQUIRED_SCOPES,
+        });
+        if (isSpotifyInvalidScopesError(error)) {
+          setStatus(`Spotify token is missing required scopes: ${SPOTIFY_REQUIRED_SCOPES.join(', ')}.`);
+        } else {
+          setStatus('Spotify playback is unavailable in-browser for this track. Open it on Spotify instead.');
+        }
         throw error;
       }
     }
