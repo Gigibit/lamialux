@@ -431,8 +431,9 @@ def _handle_start(
         "author": experience.author,
         "prompt": prompt,
         "pdf_url": experience.pdf_url,
-        "source_audio_path": experience.source_audio_path,
-        "source_audio_mime_type": experience.source_audio_mime_type,
+        "source_audio_path": str(getattr(experience, "source_audio_path", "") or ""),
+        "source_audio_mime_type": str(getattr(experience, "source_audio_mime_type", "") or ""),
+        "source_video_url": str(getattr(experience, "source_video_url", "") or ""),
         "storage_path": experience.storage_path,
         "chunks": [
             {
