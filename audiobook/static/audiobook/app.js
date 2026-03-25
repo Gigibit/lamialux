@@ -17,7 +17,7 @@
   const narrativeModeProvider = String(config.narrativeModeProvider || '').trim().toUpperCase();
   const narrativeSourceVideo = document.getElementById('narrative-source-video');
   const sourceVideoUrl = String(config.sourceVideoUrl || '').trim();
-  const usesSourceNarration = narrativeModeProvider === 'YOUTUBE_SEARCH';
+  const isSourceNarrationProvider = narrativeModeProvider === 'YOUTUBE_SEARCH';
   const PROMPT_UPDATE_INTERVAL_MS = 5000;
   const logger = window.logger && typeof window.logger.error === 'function' ? window.logger : console;
 
@@ -213,7 +213,7 @@
   };
 
   const prepareNarrativeSourceVideo = () => {
-    if (!usesSourceNarration || !narrativeSourceVideo || !sourceVideoUrl) {
+    if (!isSourceNarrationProvider || !narrativeSourceVideo || !sourceVideoUrl) {
       return;
     }
     if (isUnsupportedNarrativeSourceUrl(sourceVideoUrl)) {
@@ -391,7 +391,7 @@
     await ensureStreamingReady();
     startPromptUpdates();
 
-    if (usesSourceNarration) {
+    if (isSourceNarrationProvider) {
       if (!narrativeSourceVideo || !sourceVideoUrl) {
         logger.error('Source narration provider is enabled but no narrative source video is available.', {
           narrativeModeProvider,
@@ -406,23 +406,23 @@
           narrativeModeProvider,
           sourceVideoUrl,
         });
-        setStatus('Source narration URL is unsupported. Provide a direct MP4/WebM media URL.');
+        setStatus('Source narration URL is unsupported. Falling back to Coqui TTS playback.');
+      } else {
+        setStatus('Playing source narration video...');
+        setOverlay('LamiaLux source narration', 'Playback is using the upstream source video audio.');
+        try {
+          await narrativeSourceVideo.play();
+        } catch (error) {
+          logger.error('Source narration video playback failed to start.', {
+            error,
+            narrativeModeProvider,
+            sourceVideoUrl: narrativeSourceVideo.src,
+          });
+          setStatus('Source narration playback failed to start.');
+          throw error;
+        }
         return;
       }
-      setStatus('Playing source narration video...');
-      setOverlay('LamiaLux source narration', 'Playback is using the upstream source video audio.');
-      try {
-        await narrativeSourceVideo.play();
-      } catch (error) {
-        logger.error('Source narration video playback failed to start.', {
-          error,
-          narrativeModeProvider,
-          sourceVideoUrl: narrativeSourceVideo.src,
-        });
-        setStatus('Source narration playback failed to start.');
-        throw error;
-      }
-      return;
     }
 
     for (let index = currentIndex; index < items.length; index += 1) {
