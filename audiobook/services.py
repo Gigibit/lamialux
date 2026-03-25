@@ -7,7 +7,6 @@ import logging
 import os
 import re
 import sqlite3
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from html import unescape
 from pathlib import Path
@@ -16,6 +15,8 @@ from urllib.parse import parse_qs, urljoin, urlparse
 
 import httpx
 from pypdf import PdfReader
+from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api._errors import YouTubeTranscriptApiException
 
 logger = logging.getLogger("audiobook")
 
@@ -800,6 +801,7 @@ class YouTubeStoryPromptClient:
         self.story_prompt_model = os.getenv("OPENAI_STORY_PROMPT_MODEL", "gpt-4.1-mini")
         self.openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
         self.openai_base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+        self.ytt_api = YouTubeTranscriptApi()
 
     def build_story_prompt(
         self,
@@ -833,44 +835,16 @@ class YouTubeStoryPromptClient:
         current_seconds: float,
         delta_seconds: float,
     ) -> str:
-        params = {
-            "v": video_id,
-            "lang": "en",
-            "fmt": "srv3",
-        }
-        with httpx.Client(timeout=self.timeout) as client:
-            try:
-                response = client.get("https://www.youtube.com/api/timedtext", params=params)
-                response.raise_for_status()
-            except httpx.HTTPStatusError as exc:
-                logger.error(
-                    "YouTube transcript request failed with status %s for video_id=%s: %s",
-                    exc.response.status_code,
-                    video_id,
-                    exc,
-                )
-                return ""
-            except httpx.HTTPError as exc:
-                logger.error(
-                    "YouTube transcript request connection error for video_id=%s: %s",
-                    video_id,
-                    exc,
-                )
-                return ""
-
-        if not response.text.strip():
-            logger.error(
-                "YouTube transcript request returned an empty payload for video_id=%s.",
-                video_id,
-            )
+        language_code = self._infer_transcript_language(video_id)
+        if not language_code:
             return ""
-
         try:
-            root = ET.fromstring(response.text)
-        except ET.ParseError as exc:
+            transcript = self.ytt_api.fetch(video_id, languages=[language_code])
+        except YouTubeTranscriptApiException as exc:
             logger.error(
-                "YouTube transcript XML parsing failed for video_id=%s: %s",
+                "YouTube transcript fetch failed for video_id=%s language=%s: %s",
                 video_id,
+                language_code,
                 exc,
             )
             return ""
@@ -878,18 +852,62 @@ class YouTubeStoryPromptClient:
         min_seconds = max(current_seconds - delta_seconds, 0)
         max_seconds = current_seconds + delta_seconds
         snippets: list[str] = []
-        for node in root.findall(".//text"):
-            start = float(node.attrib.get("start", "0") or "0")
-            duration = float(node.attrib.get("dur", "0") or "0")
+        for snippet in transcript:
+            if isinstance(snippet, dict):
+                start = float(snippet.get("start", 0) or 0)
+                duration = float(snippet.get("duration", 0) or 0)
+                raw_text = str(snippet.get("text", "") or "")
+            else:
+                start = float(getattr(snippet, "start", 0) or 0)
+                duration = float(getattr(snippet, "duration", 0) or 0)
+                raw_text = str(getattr(snippet, "text", "") or "")
             end = start + duration
             if end < min_seconds or start > max_seconds:
                 continue
-            line_text = unescape("".join(node.itertext())).strip()
+            line_text = unescape(raw_text).strip()
             line_text = re.sub(r"\s+", " ", line_text)
             if line_text:
                 snippets.append(line_text)
 
         return " ".join(snippets).strip()
+
+    def _infer_transcript_language(self, video_id: str) -> str:
+        try:
+            transcript_list = list(self.ytt_api.list(video_id))
+        except YouTubeTranscriptApiException as exc:
+            logger.error(
+                "YouTube transcript language inference failed for video_id=%s: %s",
+                video_id,
+                exc,
+            )
+            return ""
+
+        if not transcript_list:
+            logger.error(
+                "YouTube transcript language inference returned no transcript candidates "
+                "for video_id=%s.",
+                video_id,
+            )
+            return ""
+
+        preferred_transcript = sorted(
+            transcript_list,
+            key=lambda transcript_item: (
+                bool(getattr(transcript_item, "is_generated", True)),
+                getattr(transcript_item, "language_code", "") != "en",
+            ),
+        )[0]
+        language_code = (
+            str(getattr(preferred_transcript, "language_code", "") or "").strip().lower()
+        )
+        if not language_code:
+            logger.error(
+                "YouTube transcript language inference produced an empty language code "
+                "for video_id=%s.",
+                video_id,
+            )
+            return ""
+        return language_code
 
     def _rewrite_prompt_with_openai(self, source_text: str) -> str:
         compact_source = source_text.strip()

@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import httpx
 from django.test import Client, TestCase
@@ -536,35 +536,33 @@ class YouTubeStoryPromptClientTests(TestCase):
         from audiobook.services import YouTubeStoryPromptClient
 
         client = YouTubeStoryPromptClient()
-        xml_payload = (
-            '<transcript>'
-            '<text start="0" dur="2">intro</text>'
-            '<text start="8" dur="4">target scene</text>'
-            '<text start="25" dur="3">ending</text>'
-            "</transcript>"
+        client._infer_transcript_language = Mock(return_value="en")
+        client.ytt_api.fetch = Mock(
+            return_value=[
+                {"text": "intro", "start": 0, "duration": 2},
+                {"text": "target scene", "start": 8, "duration": 4},
+                {"text": "ending", "start": 25, "duration": 3},
+            ]
+        )
+        transcript = client._extract_transcript_window(
+            video_id="abc123",
+            current_seconds=10,
+            delta_seconds=5,
         )
 
-        class DummyResponse:
-            text = xml_payload
-
-            def raise_for_status(self) -> None:
-                return None
-
-        class DummyHttpClient:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, exc_type, exc, tb) -> None:
-                return None
-
-            def get(self, *args, **kwargs):
-                return DummyResponse()
-
-        with patch("audiobook.services.httpx.Client", return_value=DummyHttpClient()):
-            transcript = client._extract_transcript_window(
-                video_id="abc123",
-                current_seconds=10,
-                delta_seconds=5,
-            )
-
         self.assertEqual(transcript, "target scene")
+
+    def test_infer_transcript_language_prefers_non_generated_english(self) -> None:
+        from audiobook.services import YouTubeStoryPromptClient
+
+        client = YouTubeStoryPromptClient()
+        generated_spanish = Mock(language_code="es", is_generated=True)
+        generated_english = Mock(language_code="en", is_generated=True)
+        manual_english = Mock(language_code="en", is_generated=False)
+        client.ytt_api.list = Mock(
+            return_value=[generated_spanish, generated_english, manual_english]
+        )
+
+        language_code = client._infer_transcript_language("abc123")
+
+        self.assertEqual(language_code, "en")
