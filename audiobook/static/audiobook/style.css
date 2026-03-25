@@ -28,7 +28,6 @@ a { color: var(--accent); }
 }
 
 .panel,
-.message,
 .error {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -142,7 +141,6 @@ button:disabled {
   opacity: 0.55;
 }
 .request-form button { grid-column: 1 / -1; }
-.message { color: var(--accent); }
 .error { color: var(--danger); }
 .section-heading {
   display: flex;
