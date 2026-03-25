@@ -45,14 +45,12 @@
   let compositeStream = null;
   let connectPromise = null;
   let streamReady = false;
-  let audioContext = null;
-  let destination = null;
-  let gainNode = null;
-  let sourceNode = null;
   let promptUpdateTimerId = null;
   let playbackToken = 0;
   let currentIndex = 0;
   let cancelled = false;
+  let youtubePlayer = null;
+  let youtubePlayerReadyPromise = null;
 
   const sentencePool = items
     .flatMap((item) => (item.dataset.text || '').match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [])
@@ -92,6 +90,111 @@
       return true;
     }
     return !isLikelyDirectMediaUrl(url);
+  };
+  const extractYouTubeVideoId = (url) => {
+    if (!url) {
+      return '';
+    }
+    try {
+      const parsed = new URL(url);
+      const host = parsed.hostname.toLowerCase();
+      if (host.includes('youtu.be')) {
+        return parsed.pathname.replace('/', '').trim();
+      }
+      if (host.includes('youtube.com')) {
+        if (parsed.pathname === '/watch') {
+          return String(parsed.searchParams.get('v') || '').trim();
+        }
+        if (parsed.pathname.startsWith('/embed/')) {
+          return parsed.pathname.replace('/embed/', '').trim();
+        }
+      }
+    } catch (error) {
+      logger.error('YouTube video ID extraction failed because the URL is invalid.', { error, sourceVideoUrl: url });
+    }
+    return '';
+  };
+  const loadYouTubeIframeApi = () => {
+    if (window.YT && typeof window.YT.Player === 'function') {
+      return Promise.resolve();
+    }
+    if (!youtubePlayerReadyPromise) {
+      youtubePlayerReadyPromise = new Promise((resolve, reject) => {
+        const previousReady = window.onYouTubeIframeAPIReady;
+        window.onYouTubeIframeAPIReady = () => {
+          if (typeof previousReady === 'function') {
+            previousReady();
+          }
+          resolve();
+        };
+        const existingScript = document.getElementById('youtube-iframe-api');
+        if (existingScript) {
+          return;
+        }
+        const script = document.createElement('script');
+        script.id = 'youtube-iframe-api';
+        script.src = 'https://www.youtube.com/iframe_api';
+        script.async = true;
+        script.onerror = (error) => {
+          logger.error('YouTube Iframe API script failed to load.', { error, sourceVideoUrl });
+          reject(new Error('YouTube Iframe API script failed to load.'));
+        };
+        document.head.appendChild(script);
+      });
+    }
+    return youtubePlayerReadyPromise;
+  };
+  const ensureYouTubePlayer = async (videoId) => {
+    if (!videoId) {
+      const error = new Error('YouTube video ID is missing.');
+      logger.error('Cannot initialize YouTube player without a video ID.', { sourceVideoUrl });
+      throw error;
+    }
+    await loadYouTubeIframeApi();
+    if (youtubePlayer && typeof youtubePlayer.loadVideoById === 'function') {
+      youtubePlayer.loadVideoById(videoId);
+      return youtubePlayer;
+    }
+    let host = document.getElementById('youtube-source-player');
+    if (!host) {
+      host = document.createElement('div');
+      host.id = 'youtube-source-player';
+      host.style.position = 'fixed';
+      host.style.left = '-9999px';
+      host.style.top = '0';
+      host.style.width = '320px';
+      host.style.height = '180px';
+      host.style.opacity = '0';
+      host.style.pointerEvents = 'none';
+      document.body.appendChild(host);
+    }
+    youtubePlayer = new window.YT.Player('youtube-source-player', {
+      width: '320',
+      height: '180',
+      videoId,
+      playerVars: { autoplay: 1, controls: 0, modestbranding: 1, rel: 0 },
+    });
+    return youtubePlayer;
+  };
+  const playYouTubeSourceNarration = async (url) => {
+    const videoId = extractYouTubeVideoId(url);
+    if (!videoId) {
+      const error = new Error('YouTube watch URL does not contain a valid video ID.');
+      logger.error('YouTube source playback failed because the URL did not contain a valid video ID.', { sourceVideoUrl: url });
+      throw error;
+    }
+    const player = await ensureYouTubePlayer(videoId);
+    if (typeof player.playVideo !== 'function') {
+      const error = new Error('YouTube player is unavailable.');
+      logger.error('YouTube source playback failed because the YouTube player API is unavailable.', { sourceVideoUrl: url });
+      throw error;
+    }
+    player.playVideo();
+  };
+  const stopYouTubeSourceNarration = () => {
+    if (youtubePlayer && typeof youtubePlayer.stopVideo === 'function') {
+      youtubePlayer.stopVideo();
+    }
   };
   const summarizeResponse = async (response) => {
     const body = await response.text();
@@ -166,58 +269,32 @@
     }
   };
 
-  const ensureAudioGraph = () => {
-    if (!audioContext) {
-      audioContext = new window.AudioContext();
-      destination = audioContext.createMediaStreamDestination();
-      gainNode = audioContext.createGain();
-      gainNode.gain.value = 1;
-      gainNode.connect(destination);
-    }
-    return { audioContext, destination, gainNode };
-  };
-
-  const disconnectSourceNode = () => {
-    if (sourceNode) {
-      try {
-        sourceNode.disconnect();
-      } catch (error) {
-        logger.error('Audio source disconnect failed.', error);
-      }
-      sourceNode = null;
-    }
-  };
-
-  const bindAudioElementToGraph = (element) => {
-    const graph = ensureAudioGraph();
-    disconnectSourceNode();
-    sourceNode = graph.audioContext.createMediaElementSource(element);
-    sourceNode.connect(graph.gainNode);
-    graph.gainNode.connect(graph.audioContext.destination);
-    return graph.destination.stream;
-  };
-
   const prepareCompositeStream = async () => {
     setOverlay('LamiaLux live canvas', page === 'music' ? 'Visual music canvas ready for WHIP publishing.' : 'Theia canvas capture ready for WHIP publishing.');
     const canvasStream = animationCanvas.captureStream(30);
-    let audioStream = null;
-    if (page === 'music' && musicPlayer) {
-      audioStream = bindAudioElementToGraph(musicPlayer);
-    } else if (page === 'book' && usesSourceNarration && narrativeSourceVideo) {
-      audioStream = bindAudioElementToGraph(narrativeSourceVideo);
-    } else if (page === 'book' && coquiPlayer) {
-      audioStream = bindAudioElementToGraph(coquiPlayer);
-    }
-    compositeStream = new MediaStream([...canvasStream.getVideoTracks(), ...(audioStream ? audioStream.getAudioTracks() : [])]);
+    compositeStream = new MediaStream([...canvasStream.getVideoTracks()]);
     return compositeStream;
   };
 
   const prepareNarrativeSourceVideo = () => {
-    if (!isSourceNarrationProvider || !narrativeSourceVideo || !sourceVideoUrl) {
+    if (!isSourceNarrationProvider || !sourceVideoUrl) {
+      return;
+    }
+    if (extractYouTubeVideoId(sourceVideoUrl)) {
+      setStatus('YouTube source prepared. Press play to start embedded playback.');
+      setOverlay('LamiaLux source narration', 'YouTube source will play through an embedded player on Play.');
+      return;
+    }
+    if (!narrativeSourceVideo) {
+      logger.error('Source narration provider requires the narrative source video element, but it is missing.', {
+        narrativeModeProvider,
+        sourceVideoUrl,
+      });
+      setStatus('Narrative source video element is missing.');
       return;
     }
     if (isUnsupportedNarrativeSourceUrl(sourceVideoUrl)) {
-      logger.error('Unsupported narrative source URL detected; direct browser media playback is required.', {
+      logger.log('Narrative source URL is not a direct media file; browser playback will fall back to Coqui TTS.', {
         narrativeModeProvider,
         sourceVideoUrl,
       });
@@ -392,17 +469,41 @@
     startPromptUpdates();
 
     if (isSourceNarrationProvider) {
-      if (!narrativeSourceVideo || !sourceVideoUrl) {
-        logger.error('Source narration provider is enabled but no narrative source video is available.', {
+      if (!sourceVideoUrl) {
+        logger.error('Source narration provider is enabled but no narrative source URL is available.', {
           narrativeModeProvider,
-          hasNarrativeSourceVideoElement: Boolean(narrativeSourceVideo),
           sourceVideoUrl,
         });
-        setStatus('Narrative source video is missing for this provider.');
+        setStatus('Narrative source URL is missing for this provider.');
+        return;
+      }
+      const youtubeVideoId = extractYouTubeVideoId(sourceVideoUrl);
+      if (youtubeVideoId) {
+        setStatus('Playing source narration from embedded YouTube player...');
+        setOverlay('LamiaLux source narration', 'Embedded YouTube source playback started.');
+        try {
+          await playYouTubeSourceNarration(sourceVideoUrl);
+        } catch (error) {
+          logger.error('YouTube source narration playback failed to start from the embedded player.', {
+            error,
+            narrativeModeProvider,
+            sourceVideoUrl,
+          });
+          setStatus('YouTube source narration playback failed to start.');
+          throw error;
+        }
+        return;
+      }
+      if (!narrativeSourceVideo) {
+        logger.error('Source narration provider requires the narrative source video element, but it is missing.', {
+          narrativeModeProvider,
+          sourceVideoUrl,
+        });
+        setStatus('Narrative source video element is missing for this provider.');
         return;
       }
       if (isUnsupportedNarrativeSourceUrl(sourceVideoUrl)) {
-        logger.error('Source narration playback blocked because the URL is not a direct media resource.', {
+        logger.log('Source narration URL is not a direct media resource; falling back to Coqui TTS playback.', {
           narrativeModeProvider,
           sourceVideoUrl,
         });
@@ -495,6 +596,7 @@
     await stopMediaElement(coquiPlayer);
     await stopMediaElement(musicPlayer);
     await stopMediaElement(narrativeSourceVideo);
+    stopYouTubeSourceNarration();
     setStatus('Stopped.');
     setOverlay('LamiaLux ready', page === 'music' ? 'Search a track to start visual music playback.' : 'Search a PDF to start narration playback.');
   };
