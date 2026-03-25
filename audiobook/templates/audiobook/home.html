@@ -214,6 +214,27 @@
     <script>
       window.CAOS_REMOTE_FALLBACK = "https://raw.githubusercontent.com/Gigibit/ingoya/refs/heads/theia/public/caos.js";
     </script>
+    <script>
+      window.lamialuxSpotifySdkReady = false;
+      window.lamialuxSpotifySdkReadyCallbacks = [];
+      window.onSpotifyWebPlaybackSDKReady = () => {
+        window.lamialuxSpotifySdkReady = true;
+        const callbacks = Array.isArray(window.lamialuxSpotifySdkReadyCallbacks)
+          ? window.lamialuxSpotifySdkReadyCallbacks.splice(0)
+          : [];
+        callbacks.forEach((callback) => {
+          try {
+            callback();
+          } catch (error) {
+            if (window.logger && typeof window.logger.error === 'function') {
+              window.logger.error('Spotify SDK ready callback failed.', { error });
+            } else {
+              console.error('Spotify SDK ready callback failed.', error);
+            }
+          }
+        });
+      };
+    </script>
     <script src="{% static 'audiobook/caos.js' %}"></script>
     <script src="https://sdk.scdn.co/spotify-player.js"></script>
     {{ music_track|json_script:"music-track-data" }}
