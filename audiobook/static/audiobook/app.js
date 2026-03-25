@@ -4,7 +4,7 @@
   const browserSessionInput = document.getElementById('browser-session-id');
   const playButton = document.getElementById('play-media');
   const stopButton = document.getElementById('stop-media');
-  const connectButton = document.getElementById('connect-stream');
+  const fullscreenButton = document.getElementById('fullscreen-output');
   const statusEl = document.getElementById('stream-status');
   const animationCanvas = document.getElementById('theia-canvas');
   const animationOverlay = document.getElementById('theia-canvas-overlay');
@@ -19,9 +19,10 @@
   const sourceVideoUrl = String(config.sourceVideoUrl || '').trim();
   const isSourceNarrationProvider = narrativeModeProvider === 'YOUTUBE_SEARCH';
   const PROMPT_UPDATE_INTERVAL_MS = 5000;
+  const STORY_PROMPT_DELTA_SECONDS = Number(config.updateStoryPromptDeltaSeconds || 10);
   const logger = window.logger && typeof window.logger.error === 'function' ? window.logger : console;
 
-  if (!playButton || !stopButton || !connectButton || !statusEl || !animationCanvas || !animationOverlay || !video || !sessionLabel) {
+  if (!playButton || !stopButton || !statusEl || !animationCanvas || !animationOverlay || !video || !sessionLabel) {
     return;
   }
 
@@ -46,6 +47,7 @@
   let connectPromise = null;
   let streamReady = false;
   let promptUpdateTimerId = null;
+  let storyPromptTimerId = null;
   let playbackToken = 0;
   let currentIndex = 0;
   let cancelled = false;
@@ -216,6 +218,13 @@
     }
   };
 
+  const stopStoryPromptUpdates = () => {
+    if (storyPromptTimerId) {
+      window.clearInterval(storyPromptTimerId);
+      storyPromptTimerId = null;
+    }
+  };
+
   const pushPromptUpdate = async (prompt) => {
     if (!prompt || !streamSession.sessionId) {
       return;
@@ -236,8 +245,46 @@
 
   const startPromptUpdates = () => {
     stopPromptUpdates();
+    stopStoryPromptUpdates();
     if (page !== 'book' || !sentencePool.length) {
       return;
+    }
+    if (isSourceNarrationProvider && sourceVideoUrl) {
+      const videoId = extractYouTubeVideoId(sourceVideoUrl);
+      if (videoId) {
+        storyPromptTimerId = window.setInterval(() => {
+          const currentSeconds = youtubePlayer && typeof youtubePlayer.getCurrentTime === 'function'
+            ? Number(youtubePlayer.getCurrentTime() || 0)
+            : 0;
+          const fallbackText = chooseRandomPromptSentence();
+          void fetch(`/streams/${encodeURIComponent(streamSession.sessionId)}/story-prompt`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              videoId,
+              currentSeconds,
+              fallbackText,
+            }),
+          }).then((response) => {
+            if (!response.ok) {
+              logger.error('Story prompt update returned a non-2xx response.', {
+                status: response.status,
+                sessionId: streamSession.sessionId,
+                currentSeconds,
+                deltaSeconds: STORY_PROMPT_DELTA_SECONDS,
+              });
+            }
+          }).catch((error) => {
+            logger.error('Story prompt update failed in the browser.', {
+              error,
+              sessionId: streamSession.sessionId,
+              currentSeconds,
+              deltaSeconds: STORY_PROMPT_DELTA_SECONDS,
+            });
+          });
+        }, PROMPT_UPDATE_INTERVAL_MS);
+        return;
+      }
     }
     promptUpdateTimerId = window.setInterval(() => {
       const prompt = chooseRandomPromptSentence();
@@ -592,6 +639,7 @@
     playbackToken += 1;
     currentIndex = 0;
     stopPromptUpdates();
+    stopStoryPromptUpdates();
     highlightChunk(-1);
     await stopMediaElement(coquiPlayer);
     await stopMediaElement(musicPlayer);
@@ -599,6 +647,21 @@
     stopYouTubeSourceNarration();
     setStatus('Stopped.');
     setOverlay('LamiaLux ready', page === 'music' ? 'Search a track to start visual music playback.' : 'Search a PDF to start narration playback.');
+  };
+
+  const enterFullscreen = async () => {
+    try {
+      if (video.requestFullscreen) {
+        await video.requestFullscreen();
+        return;
+      }
+      if (animationCanvas.requestFullscreen) {
+        await animationCanvas.requestFullscreen();
+      }
+    } catch (error) {
+      logger.error('Fullscreen request failed.', error);
+      setStatus('Fullscreen mode is unavailable in this browser.');
+    }
   };
 
   document.querySelectorAll('[data-nav-target]').forEach((link) => {
@@ -616,13 +679,6 @@
     });
   });
 
-  connectButton.addEventListener('click', async () => {
-    try {
-      await ensureStreamingReady();
-    } catch (error) {
-      logger.error('Connect WHIP/WHEP action failed.', error);
-    }
-  });
   playButton.addEventListener('click', async () => {
     try {
       if (page === 'music') {
@@ -635,6 +691,9 @@
     }
   });
   stopButton.addEventListener('click', () => { void stopEverything(); });
+  if (fullscreenButton) {
+    fullscreenButton.addEventListener('click', () => { void enterFullscreen(); });
+  }
 
   prepareNarrativeSourceVideo();
   setOverlay('LamiaLux ready', page === 'music' ? 'Search a track to prepare the visual music canvas.' : 'Search a PDF to prepare the book canvas.');

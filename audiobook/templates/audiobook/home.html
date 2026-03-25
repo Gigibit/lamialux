@@ -131,15 +131,15 @@
             </div>
           </div>
           <div class="console-actions">
-            <button type="button" id="connect-stream" {% if not stream %}disabled{% endif %}>Connect WHIP/WHEP</button>
             {% if page == 'music' %}
               <button type="button" id="play-media" {% if not music_track %}disabled{% endif %}>Play track</button>
             {% else %}
               <button type="button" id="play-media" {% if not stream %}disabled{% endif %}>Read book</button>
             {% endif %}
+            <button type="button" id="fullscreen-output" class="secondary">Fullscreen output</button>
             <button type="button" id="stop-media" class="secondary">Stop</button>
           </div>
-          <p id="stream-status" class="small">{% if stream %}Idle.{% else %}{% if page == 'music' %}Canvas ready. Search and prepare a song to enable WHIP/WHEP and playback controls.{% else %}Canvas ready. Search and prepare a stream to enable WHIP/WHEP and TTS controls.{% endif %}{% endif %}</p>
+          <p id="stream-status" class="small">{% if stream %}Idle.{% else %}{% if page == 'music' %}Canvas ready. Search and prepare a song to enable playback controls.{% else %}Canvas ready. Search and prepare a stream to enable TTS controls.{% endif %}{% endif %}</p>
           <p class="small note">{% if page == 'music' %}When a Spotify preview URL is available, the browser audio graph mixes it into the WHIP input stream together with the canvas video.{% else %}Coqui TTS audio is generated on the server and played through the browser audio graph so the narration can be heard locally and embedded into the published WHIP stream.{% endif %}</p>
         </article>
 
@@ -187,6 +187,7 @@
         hasPreparedStream: {{ stream|yesno:'true,false' }},
         narrativeModeProvider: "{{ narrative_mode_provider|default:'' }}",
         sourceVideoUrl: "{{ stream.source_video_url|default:''|escapejs }}",
+        updateStoryPromptDeltaSeconds: {{ update_story_prompt_delta_seconds|default:10 }},
         musicTrack: JSON.parse(document.getElementById('music-track-data').textContent),
       };
     </script>

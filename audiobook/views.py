@@ -20,6 +20,7 @@ from .services import (
     PromptStreamUpdater,
     StreamSession,
     UpstreamServiceError,
+    YouTubeStoryPromptClient,
 )
 
 logger = logging.getLogger("audiobook")
@@ -66,6 +67,9 @@ def _page_context(page: str) -> dict[str, object]:
     return {
         "page": page,
         "narrative_mode_provider": narrative_mode_provider,
+        "update_story_prompt_delta_seconds": int(
+            float(os.getenv("UPDATE_STORY_PROMPT_DELTA_SECONDS", "10"))
+        ),
         "book_form": BookRequestForm(),
         "music_form": MusicRequestForm(),
         "message": "",
@@ -588,6 +592,77 @@ def stream_prompt(request: HttpRequest, session_id: str) -> JsonResponse:
         return JsonResponse({"error": str(exc)}, status=502)
 
     return JsonResponse({"message": "Prompt updated."})
+
+
+@csrf_exempt
+@require_POST
+def stream_story_prompt(request: HttpRequest, session_id: str) -> JsonResponse:
+    stream = STREAM_SESSIONS.get(session_id)
+    if stream is None or not stream.upstream_stream_id:
+        logger.error(
+            "Story prompt update requested for unknown or incomplete stream session '%s'.",
+            session_id,
+        )
+        logger.error("Returning non-2xx response for missing story prompt session: status=404")
+        return JsonResponse({"error": "Stream session not found."}, status=404)
+
+    try:
+        payload = json.loads(request.body.decode("utf-8") or "{}")
+    except json.JSONDecodeError as exc:
+        logger.error("Invalid story prompt payload for session '%s': %s", session_id, exc)
+        logger.error("Returning non-2xx response for invalid story prompt payload: status=400")
+        return JsonResponse({"error": "Invalid JSON payload."}, status=400)
+
+    video_id = str(payload.get("videoId") or "").strip()
+    fallback_text = str(payload.get("fallbackText") or "").strip()
+    current_seconds_raw = payload.get("currentSeconds")
+    delta_seconds = float(os.getenv("UPDATE_STORY_PROMPT_DELTA_SECONDS", "10"))
+    if not video_id:
+        logger.error(
+            "Story prompt update requested without videoId for session '%s': payload=%s",
+            session_id,
+            payload,
+        )
+        logger.error("Returning non-2xx response for missing story prompt videoId: status=400")
+        return JsonResponse({"error": "videoId is required."}, status=400)
+
+    try:
+        current_seconds = float(current_seconds_raw)
+    except (TypeError, ValueError) as exc:
+        logger.error(
+            "Story prompt update requested with invalid currentSeconds for session '%s': %s",
+            session_id,
+            exc,
+        )
+        logger.error(
+            "Returning non-2xx response for invalid story prompt currentSeconds: status=400"
+        )
+        return JsonResponse({"error": "currentSeconds must be a number."}, status=400)
+
+    try:
+        prompt, source_text = YouTubeStoryPromptClient().build_story_prompt(
+            video_id=video_id,
+            current_seconds=current_seconds,
+            delta_seconds=delta_seconds,
+            fallback_text=fallback_text,
+        )
+        PromptStreamUpdater().update_prompt(
+            upstream_stream_id=stream.upstream_stream_id,
+            prompt=prompt,
+        )
+    except UpstreamServiceError as exc:
+        logger.error("Story prompt update failed for session '%s': %s", session_id, exc)
+        logger.error("Returning non-2xx response for story prompt upstream failure: status=502")
+        return JsonResponse({"error": str(exc)}, status=502)
+
+    return JsonResponse(
+        {
+            "message": "Story prompt updated.",
+            "prompt": prompt,
+            "sourceText": source_text,
+            "deltaSeconds": delta_seconds,
+        }
+    )
 
 
 @require_GET
