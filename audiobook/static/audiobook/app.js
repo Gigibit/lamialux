@@ -452,6 +452,7 @@
     stopCompositeFrameLoop();
     compositeFrameTimerId = window.setInterval(() => {
       compositeContext.clearRect(0, 0, compositeCanvas.width, compositeCanvas.height);
+      compositeContext.drawImage(animationCanvas, 0, 0, compositeCanvas.width, compositeCanvas.height);
       if (theiaSvgTexture && theiaSvgTexture.complete) {
         const baseWidth = Number(theiaSvgTexture.naturalWidth) || 300;
         const baseHeight = Number(theiaSvgTexture.naturalHeight) || 300;
@@ -464,7 +465,6 @@
         const drawY = (compositeCanvas.height - drawHeight) / 2;
         compositeContext.drawImage(theiaSvgTexture, drawX, drawY, drawWidth, drawHeight);
       }
-      compositeContext.drawImage(animationCanvas, 0, 0, compositeCanvas.width, compositeCanvas.height);
     }, 33);
   };
 
