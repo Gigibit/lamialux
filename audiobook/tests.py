@@ -247,6 +247,10 @@ class HomeViewTests(TestCase):
                     "access_token": "fresh-access-token",
                     "refresh_token": "fresh-refresh-token",
                     "expires_in": 3600,
+                    "scope": (
+                        "streaming user-read-email user-read-private "
+                        "user-modify-playback-state"
+                    ),
                 }
 
         class DummyClient:
@@ -313,7 +317,14 @@ class HomeViewTests(TestCase):
 
             @staticmethod
             def json():
-                return {"access_token": "refresh-access-token", "expires_in": 3600}
+                return {
+                    "access_token": "refresh-access-token",
+                    "expires_in": 3600,
+                    "scope": (
+                        "streaming user-read-email user-read-private "
+                        "user-modify-playback-state"
+                    ),
+                }
 
         class DummyClient:
             def __enter__(self):
@@ -359,6 +370,56 @@ class HomeViewTests(TestCase):
         payload = json.loads(response.content.decode("utf-8"))
         self.assertEqual(payload["error"], "Spotify authorization is required.")
         self.assertIn("authorization_url", payload)
+
+    @patch.dict(
+        "os.environ",
+        {
+            "SPOTIFY_CLIENT_ID": "spotify-client-id",
+            "SPOTIFY_REDIRECT_URI": "https://example.com/music",
+        },
+    )
+    @patch("audiobook.views.httpx.Client")
+    def test_spotify_web_playback_token_endpoint_rejects_missing_scopes(
+        self, http_client
+    ) -> None:
+        class DummyResponse:
+            status_code = 200
+
+            @staticmethod
+            def json():
+                return {
+                    "access_token": "fresh-access-token",
+                    "refresh_token": "fresh-refresh-token",
+                    "expires_in": 3600,
+                    "scope": "user-read-email user-read-private",
+                }
+
+        class DummyClient:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+            def post(self, url, *, data, auth, headers):
+                return DummyResponse()
+
+        http_client.return_value = DummyClient()
+        session = self.client.session
+        session["spotify_oauth_state"] = "state-123"
+        session["spotify_oauth_code_verifier"] = "verifier-123"
+        session.save()
+
+        response = self.client.get("/spotify/web-playback/token?code=auth-code-123&state=state-123")
+
+        self.assertEqual(response.status_code, 401)
+        payload = json.loads(response.content.decode("utf-8"))
+        self.assertEqual(
+            payload["error"], "Spotify authorization is required with Web Playback scopes."
+        )
+        self.assertEqual(
+            payload["missing_scopes"], ["streaming", "user-modify-playback-state"]
+        )
 
     @patch("audiobook.views.httpx.Client")
     def test_whep_proxy_returns_502_when_upstream_times_out(self, http_client) -> None:
