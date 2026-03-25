@@ -21,6 +21,15 @@ from youtube_transcript_api._errors import YouTubeTranscriptApiException
 logger = logging.getLogger("audiobook")
 
 
+def _http_response_debug_context(response: httpx.Response) -> dict[str, object]:
+    return {
+        "status": response.status_code,
+        "url": str(response.request.url) if response.request else "",
+        "content_type": response.headers.get("content-type"),
+        "body_preview": response.text[:400],
+    }
+
+
 class UpstreamServiceError(Exception):
     """Raised when an upstream provider returns an error."""
 
@@ -89,8 +98,15 @@ class OpenAiSearchNarrativeClient:
             logger.error("OPENAI_SEARCH mode requested without OPENAI_API_KEY configured.")
             raise UpstreamServiceError("OPENAI_SEARCH requires OPENAI_API_KEY.")
 
+        logger.info("OpenAI narrative experience requested for query='%s'.", query)
         search_result = self._search_audiobook_video(query)
         media_result = self._download_media(search_result["video_url"])
+        logger.info(
+            "OpenAI narrative experience prepared for query='%s' with media cache_hit=%s path=%s",
+            query,
+            media_result.cache_hit,
+            media_result.audio_path,
+        )
         return NarrativeExperience(
             title=search_result["title"],
             author=search_result["author"],
@@ -129,6 +145,15 @@ class OpenAiSearchNarrativeClient:
 
         with httpx.Client(timeout=self.timeout) as client:
             try:
+                logger.info(
+                    (
+                        "Calling OpenAI responses API for audiobook "
+                        "query='%s' model='%s' base_url='%s'."
+                    ),
+                    query,
+                    self.model,
+                    self.base_url,
+                )
                 response = client.post(f"{self.base_url}/responses", headers=headers, json=payload)
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
@@ -145,6 +170,11 @@ class OpenAiSearchNarrativeClient:
                 logger.error("OpenAI search connection error for query '%s': %s", query, exc)
                 raise UpstreamServiceError("OpenAI search is unavailable right now.") from exc
 
+        logger.info(
+            "OpenAI responses API returned successful search payload for query='%s': %s",
+            query,
+            _http_response_debug_context(response),
+        )
         parsed = self._parse_openai_search_response(response.json())
         video_url = str(parsed.get("video_url") or "").strip()
         if not video_url.startswith(("http://", "https://")):
@@ -198,6 +228,11 @@ class OpenAiSearchNarrativeClient:
         cache_key = hashlib.sha256(media_url.encode("utf-8")).hexdigest()
         existing = next(iter(sorted(self.media_cache_dir.glob(f"{cache_key}.*"))), None)
         if existing is not None:
+            logger.info(
+                "Using cached OpenAI media download for url='%s' at '%s'.",
+                media_url,
+                existing,
+            )
             return CoquiTtsResult(
                 audio_path=str(existing),
                 mime_type=self._guess_media_mime_type(existing.suffix),
@@ -206,6 +241,7 @@ class OpenAiSearchNarrativeClient:
 
         with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
             try:
+                logger.info("Downloading audiobook media from '%s'.", media_url)
                 response = client.get(media_url, headers={"User-Agent": "Mozilla/5.0 LamiaLux/1.0"})
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
@@ -222,6 +258,10 @@ class OpenAiSearchNarrativeClient:
                 logger.error("Audiobook media download connection error for %s: %s", media_url, exc)
                 raise UpstreamServiceError("Audiobook media download is unavailable.") from exc
 
+        logger.info(
+            "Downloaded audiobook media response: %s",
+            _http_response_debug_context(response),
+        )
         content_type = str(response.headers.get("content-type") or "").split(";")[0].strip().lower()
         suffix = self._suffix_for_media_url(media_url, content_type)
         output_path = self.media_cache_dir / f"{cache_key}{suffix}"
@@ -273,6 +313,7 @@ class WebResearchNarrativeClient:
         self.search_url = os.getenv("WEB_RESEARCH_SEARCH_URL", "https://duckduckgo.com/html/")
 
     def build_experience(self, query: str) -> NarrativeExperience:
+        logger.info("Web research narrative experience requested for query='%s'.", query)
         cached_experience = self._load_cached_experience(query)
         if cached_experience is not None:
             logger.info("Using cached narrative chunks for query '%s'.", query)
@@ -339,6 +380,11 @@ class WebResearchNarrativeClient:
         search_query = f"{query} filetype:pdf"
         with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
             try:
+                logger.info(
+                    "Calling web search for PDF query='%s' with search_url='%s'.",
+                    search_query,
+                    self.search_url,
+                )
                 response = client.get(
                     self.search_url,
                     params={"q": search_query},
@@ -357,6 +403,11 @@ class WebResearchNarrativeClient:
                 logger.error("Web PDF search connection error for query '%s': %s", query, exc)
                 raise UpstreamServiceError("Web research search is unavailable.") from exc
 
+        logger.info(
+            "Web PDF search response details for query='%s': %s",
+            query,
+            _http_response_debug_context(response),
+        )
         for candidate in self._extract_pdf_candidates(response.text):
             normalized_url = self._normalize_pdf_url(candidate)
             if normalized_url:
@@ -414,6 +465,7 @@ class WebResearchNarrativeClient:
     def _download_pdf(self, pdf_url: str) -> bytes:
         with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
             try:
+                logger.info("Downloading PDF content from '%s'.", pdf_url)
                 response = client.get(pdf_url, headers={"User-Agent": "Mozilla/5.0 LamiaLux/1.0"})
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
@@ -428,6 +480,7 @@ class WebResearchNarrativeClient:
                 logger.error("PDF download connection error for %s: %s", pdf_url, exc)
                 raise UpstreamServiceError("PDF download is unavailable.") from exc
 
+        logger.info("Downloaded PDF response details: %s", _http_response_debug_context(response))
         return response.content
 
     def _extract_chunks(self, pdf_bytes: bytes) -> list[NarrativeChunk]:
@@ -589,6 +642,7 @@ class MusicSearchClient:
         if self.provider != "SPOTIFY":
             logger.error("Unsupported MUSIC_MODE_PROVIDER '%s'.", self.provider)
             raise UpstreamServiceError("Only the SPOTIFY music provider is currently supported.")
+        logger.info("Music search requested with provider='%s' query='%s'.", self.provider, query)
         access_token = self._fetch_spotify_access_token()
         return self._search_spotify_track(query=query, access_token=access_token)
 
@@ -609,6 +663,7 @@ class MusicSearchClient:
         ).decode("ascii")
         with httpx.Client(timeout=self.timeout) as client:
             try:
+                logger.info("Requesting Spotify access token from '%s'.", self.SPOTIFY_TOKEN_URL)
                 response = client.post(
                     self.SPOTIFY_TOKEN_URL,
                     headers={
@@ -629,6 +684,7 @@ class MusicSearchClient:
                 logger.error("Spotify token request connection error: %s", exc)
                 raise UpstreamServiceError("Spotify is unavailable right now.") from exc
 
+        logger.info("Spotify token response details: %s", _http_response_debug_context(response))
         access_token = str(response.json().get("access_token") or "")
         if not access_token:
             logger.error(
@@ -641,6 +697,7 @@ class MusicSearchClient:
     def _search_spotify_track(self, *, query: str, access_token: str) -> MusicExperience:
         with httpx.Client(timeout=self.timeout) as client:
             try:
+                logger.info("Calling Spotify track search for query='%s'.", query)
                 response = client.get(
                     self.SPOTIFY_SEARCH_URL,
                     headers={"Authorization": f"Bearer {access_token}"},
@@ -659,6 +716,11 @@ class MusicSearchClient:
                 logger.error("Spotify track search connection error for query '%s': %s", query, exc)
                 raise UpstreamServiceError("Spotify search is unavailable.") from exc
 
+        logger.info(
+            "Spotify track search response details for query='%s': %s",
+            query,
+            _http_response_debug_context(response),
+        )
         items = response.json().get("tracks", {}).get("items", [])
         if not items:
             logger.error("Spotify returned no tracks for query '%s'.", query)
@@ -697,6 +759,7 @@ class YouTubeSearchNarrativeClient:
             logger.error("YOUTUBE_SEARCH mode requested without YOUTUBE_API_KEY configured.")
             raise UpstreamServiceError("YOUTUBE_SEARCH requires YOUTUBE_API_KEY.")
 
+        logger.info("YouTube narrative experience requested for query='%s'.", query)
         result = self._search_video(query)
         return NarrativeExperience(
             title=result["title"],
@@ -725,6 +788,11 @@ class YouTubeSearchNarrativeClient:
         }
         with httpx.Client(timeout=self.timeout) as client:
             try:
+                logger.info(
+                    "Calling YouTube search API for query='%s' max_results=%s.",
+                    normalized_query,
+                    self.max_results,
+                )
                 response = client.get(f"{self.base_url}/search", params=params)
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
@@ -739,6 +807,11 @@ class YouTubeSearchNarrativeClient:
                 logger.error("YouTube API connection error for query '%s': %s", query, exc)
                 raise UpstreamServiceError("YouTube API is unavailable right now.") from exc
 
+        logger.info(
+            "YouTube search API response details for query='%s': %s",
+            query,
+            _http_response_debug_context(response),
+        )
         payload = response.json()
         items = payload.get("items", [])
         if not isinstance(items, list) or not items:
@@ -930,6 +1003,11 @@ class YouTubeStoryPromptClient:
 
         with httpx.Client(timeout=self.timeout) as client:
             try:
+                logger.info(
+                    "Calling OpenAI story prompt rewrite model='%s' source_chars=%s.",
+                    self.story_prompt_model,
+                    len(compact_source),
+                )
                 response = client.post(
                     f"{self.openai_base_url}/responses",
                     headers=headers,
@@ -947,6 +1025,10 @@ class YouTubeStoryPromptClient:
                 logger.error("OpenAI story prompt rewrite connection error: %s", exc)
                 return compact_source[:700]
 
+        logger.info(
+            "OpenAI story prompt rewrite response details: %s",
+            _http_response_debug_context(response),
+        )
         rewritten = self._parse_openai_output_text(response.json())
         return rewritten or compact_source[:700]
 
@@ -1035,6 +1117,12 @@ class DaydreamClient:
 
         with httpx.Client(timeout=self.timeout) as client:
             try:
+                logger.info(
+                    "Calling Daydream stream start endpoint='%s' base_url='%s' input_type='%s'.",
+                    endpoint,
+                    self.base_url,
+                    payload.get("input_type"),
+                )
                 response = client.post(
                     f"{self.base_url}{endpoint}",
                     headers=self._headers(),
@@ -1055,6 +1143,10 @@ class DaydreamClient:
                 logger.error("Daydream stream session connection error at %s: %s", endpoint, exc)
                 raise UpstreamServiceError("Daydream is unavailable right now.") from exc
 
+        logger.info(
+            "Daydream stream start response details: %s",
+            _http_response_debug_context(response),
+        )
         return self._extract_stream_session(response.json())
 
 
@@ -1079,6 +1171,12 @@ class CoquiTtsClient:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         output_path = self.cache_dir / f"{cache_key}.wav"
         if output_path.exists():
+            logger.info(
+                "Using cached Coqui TTS audio for session_id=%s chunk_index=%s path=%s.",
+                session_id,
+                chunk_index,
+                output_path,
+            )
             return CoquiTtsResult(
                 audio_path=str(output_path), mime_type="audio/wav", cache_hit=True
             )
@@ -1140,6 +1238,11 @@ class PromptStreamUpdater:
 
         with httpx.Client(timeout=self.timeout) as client:
             try:
+                logger.info(
+                    "Calling Daydream prompt update for stream_id=%s prompt_chars=%s.",
+                    upstream_stream_id,
+                    len(normalized_prompt),
+                )
                 response = client.patch(
                     f"{self.base_url}/v1/streams/{upstream_stream_id}",
                     headers=headers,
@@ -1162,3 +1265,8 @@ class PromptStreamUpdater:
                     exc,
                 )
                 raise UpstreamServiceError("Prompt stream update is unavailable.") from exc
+
+        logger.info(
+            "Daydream prompt update response details: %s",
+            _http_response_debug_context(response),
+        )
