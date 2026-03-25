@@ -96,17 +96,13 @@
           </div>
           <p class="small">{% if stream %}{{ stream.author }}{% else %}The visible canvas is always mounted so the animation surface is available before streaming starts.{% endif %}</p>
           <video id="whep-player" autoplay playsinline muted></video>
-            <p class="small" id="stream-session-label">{% if stream %}Session not matched yet.{% else %}Search a narrative source to bind this canvas to a stream session.{% endif %}</p>
-          </div>
-          <p class="small">{% if stream %}{{ stream.author }}{% else %}The visible canvas is always mounted so the animation surface is available before streaming starts.{% endif %}</p>
-          <video id="whep-player" controls autoplay playsinline muted></video>
           <video
             id="narrative-source-video"
             preload="metadata"
             playsinline
             crossorigin="anonymous"
             {% if stream and stream.source_video_url %}src="{{ stream.source_video_url }}"{% endif %}
-            {% if not stream or not stream.source_video_url %}hidden{% endif %}
+            {% if not stream or not stream.source_video_url or narrative_mode_provider == 'YOUTUBE_SEARCH' %}hidden{% endif %}
           ></video>
           <audio id="coqui-player" preload="none" hidden></audio>
           <audio id="music-player" preload="none" {% if page != 'music' %}hidden{% endif %}></audio>
@@ -249,7 +245,13 @@
         let sourceNode = null;
         let promptUpdateTimerId = null;
         let playbackToken = 0;
+        const narrativeModeProvider = '{{ narrative_mode_provider|default:""|escapejs }}';
+        const streamNarrativeModeProvider = '{{ stream.narrative_mode_provider|default:""|escapejs }}';
         const initialSourceVideoUrl = '{{ stream.source_video_url|default:""|escapejs }}';
+        const shouldUseNarrativeSourceVideo = Boolean(
+          initialSourceVideoUrl
+          && (streamNarrativeModeProvider || narrativeModeProvider) !== 'YOUTUBE_SEARCH'
+        );
 
         const sentencePool = items
           .flatMap((item) => (item.dataset.text || '').match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [])
@@ -472,7 +474,7 @@
           }
 
           await ensureAudioGraph();
-          const sourceUrl = (initialSourceVideoUrl || '').trim();
+          const sourceUrl = shouldUseNarrativeSourceVideo ? (initialSourceVideoUrl || '').trim() : '';
           if (sourceUrl) {
             try {
               narrativeSourceVideo.hidden = false;
@@ -494,7 +496,7 @@
                 ...videoTracks,
                 ...audioTracks,
               ]);
-              drawCanvas('Publishing YouTube source video feed through WHIP.');
+              drawCanvas('Publishing narrative source video feed through WHIP.');
               return compositeStream;
             } catch (error) {
               logger.error('Failed to prepare narrative source video for WHIP publishing.', {
@@ -507,6 +509,7 @@
           }
 
           drawCanvas('Theia canvas capture ready for WHIP publishing.');
+          narrativeSourceVideo.hidden = true;
           const canvasStream = animationCanvas.captureStream(30);
           compositeStream = new MediaStream([...canvasStream.getVideoTracks(), ...destination.stream.getAudioTracks()]);
           return compositeStream;

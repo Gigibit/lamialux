@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import uuid
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from .services import (
     DaydreamClient,
     MusicSearchClient,
     NarrativeClientFactory,
+    NarrativeModeProvider,
     PromptStreamUpdater,
     StreamSession,
     UpstreamServiceError,
@@ -56,8 +58,14 @@ def _whep_upstream_url(stream: StreamSession, method: str) -> str:
 
 
 def _page_context(page: str) -> dict[str, object]:
+    narrative_mode_provider = (
+        str(os.getenv("NARRATIVE_MODE_PROVIDER", NarrativeModeProvider.WEB_RESEARCH_TTS))
+        .strip()
+        .upper()
+    )
     return {
         "page": page,
+        "narrative_mode_provider": narrative_mode_provider,
         "book_form": BookRequestForm(),
         "music_form": MusicRequestForm(),
         "message": "",
@@ -440,6 +448,7 @@ def _handle_book_start(
     _store_stream_session(browser_session_id, livepeer_stream_session)
     prepared_stream = {
         "mode": "book",
+        "narrative_mode_provider": context["narrative_mode_provider"],
         "title": experience.title,
         "author": experience.author,
         "prompt": prompt,
@@ -609,6 +618,13 @@ def coqui_tts(request: HttpRequest) -> HttpResponse:
         return HttpResponse("Stream session not found.", status=404)
 
     home_stream = request.session.get("prepared_stream")
+    if not isinstance(home_stream, dict):
+        logger.error(
+            "Coqui TTS requested without a prepared_stream in session. session_id=%s",
+            session_id,
+        )
+        logger.error("Returning non-2xx response for missing prepared stream context: status=404")
+        return HttpResponse("Prepared stream context not found.", status=404)
     chunks = list(home_stream.get("chunks", [])) if isinstance(home_stream, dict) else []
     if chunk_index < 1 or chunk_index > len(chunks):
         logger.error(
@@ -623,14 +639,6 @@ def coqui_tts(request: HttpRequest) -> HttpResponse:
         logger.error("Returning non-2xx response for missing Coqui chunk: status=404")
         return HttpResponse("Chunk not found for this stream session.", status=404)
 
-    text = str(chunks[chunk_index - 1].get("text") or "")
-    try:
-        result = CoquiTtsClient().synthesize(
-            session_id=stream_context.session_id,
-            chunk_index=chunk_index,
-            text=text,
-        )
-    except UpstreamServiceError as exc:
     source_audio_path = str(home_stream.get("source_audio_path") or "").strip()
     source_audio_mime_type = str(home_stream.get("source_audio_mime_type") or "").strip()
     if source_audio_path:
@@ -680,6 +688,3 @@ def coqui_tts(request: HttpRequest) -> HttpResponse:
         return HttpResponse("Prepared audio file not found.", status=404)
 
     return FileResponse(open(result.audio_path, "rb"), content_type=result.mime_type)
-    response = FileResponse(open(audio_file_path, "rb"), content_type=result.mime_type)
-    response["Cache-Control"] = "public, max-age=31536000, immutable"
-    return response
