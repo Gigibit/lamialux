@@ -64,6 +64,7 @@
   let lipRandomVerticalBoost = 0;
   let lipRandomWidthOffset = 0;
   let lipRandomInsideOffset = 0;
+  let lipAxisMixBias = 0.5;
   let playbackToken = 0;
   let currentIndex = 0;
   let cancelled = false;
@@ -483,24 +484,26 @@
     }
     if ((timestampMs - lastLipRandomUpdateMs) > 75) {
       lastLipRandomUpdateMs = timestampMs;
-      lipRandomVerticalBoost = (Math.random() * 0.48) - 0.06;
-      lipRandomWidthOffset = (Math.random() * 0.2) - 0.1;
-      lipRandomInsideOffset = (Math.random() * 0.36) - 0.1;
+      lipAxisMixBias = Math.random();
+      const axisShift = (Math.random() * 0.24) - 0.12;
+      lipRandomVerticalBoost = ((Math.random() * 0.24) - 0.08) + (axisShift * (1 - lipAxisMixBias));
+      lipRandomWidthOffset = ((Math.random() * 0.36) - 0.18) + (axisShift * lipAxisMixBias);
+      lipRandomInsideOffset = (Math.random() * 0.26) - 0.08;
     }
     const oscillation = (Math.sin(timestampMs / 88) + 1) / 2;
     const audioIntensity = getLipAudioIntensity();
     const speechPulse = Math.min(1.12, (audioIntensity * 2.55) + (oscillation * 0.82));
     const jawDrop = Math.pow(Math.min(1, speechPulse), 0.58);
     const lipTension = 1 - (jawDrop * 0.7);
-    const width = 17 + (lipTension * 7.5) + (lipRandomWidthOffset * 6);
-    const verticalExpansion = Math.max(0, jawDrop + lipRandomVerticalBoost);
-    const upperLift = 186 + (verticalExpansion * 13.5);
-    const lowerDrop = 194 + (verticalExpansion * 92);
+    const width = 17 + (lipTension * 7.5) + (lipRandomWidthOffset * 5.1);
+    const verticalExpansion = Math.max(0, (jawDrop * 0.78) + lipRandomVerticalBoost);
+    const upperLift = 186 + (verticalExpansion * 11.6);
+    const lowerDrop = 194 + (verticalExpansion * 74);
     const cornerLeft = 150 - width;
     const cornerRight = 150 + width;
-    mouthUpper.setAttribute('d', `M${cornerLeft} 190 Q150 ${upperLift} ${cornerRight} 190 Q150 ${193 + (verticalExpansion * 8.6)} ${cornerLeft} 190 Z`);
-    mouthLower.setAttribute('d', `M${cornerLeft} 190 Q150 ${lowerDrop} ${cornerRight} 190 Q150 ${194 + (verticalExpansion * 45.5)} ${cornerLeft} 190 Z`);
-    mouthInside.setAttribute('d', `M${cornerLeft + 1} 190 Q150 ${191 + (verticalExpansion * 76) + (lipRandomInsideOffset * 6)} ${cornerRight - 1} 190 Q150 ${194 + (verticalExpansion * 48)} ${cornerLeft + 1} 190 Z`);
+    mouthUpper.setAttribute('d', `M${cornerLeft} 190 Q150 ${upperLift} ${cornerRight} 190 Q150 ${193 + (verticalExpansion * 7.1)} ${cornerLeft} 190 Z`);
+    mouthLower.setAttribute('d', `M${cornerLeft} 190 Q150 ${lowerDrop} ${cornerRight} 190 Q150 ${194 + (verticalExpansion * 38)} ${cornerLeft} 190 Z`);
+    mouthInside.setAttribute('d', `M${cornerLeft + 1} 190 Q150 ${191 + (verticalExpansion * 60) + (lipRandomInsideOffset * 6)} ${cornerRight - 1} 190 Q150 ${194 + (verticalExpansion * 37)} ${cornerLeft + 1} 190 Z`);
   };
 
   const startTheiaSvgAnimator = () => {

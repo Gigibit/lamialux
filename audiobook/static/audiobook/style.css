@@ -198,7 +198,12 @@ button:disabled {
   max-height: 100%;
 }
 .theia-form-deeper--compact {
-  width: min(70%, 460px) !important;
+  width: min(64%, 420px) !important;
+}
+#theia-canvas {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
 video,
 canvas {
