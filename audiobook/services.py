@@ -62,6 +62,7 @@ class MusicExperience:
     cover_image_url: str
     external_url: str
     preview_url: str
+    spotify_uri: str
     provider: str
 
 
@@ -738,6 +739,7 @@ class MusicSearchClient:
             cover_image_url=str(images[0].get("url") if images else ""),
             external_url=str(track.get("external_urls", {}).get("spotify") or ""),
             preview_url=str(track.get("preview_url") or ""),
+            spotify_uri=str(track.get("uri") or ""),
             provider="SPOTIFY",
         )
 class NarrativeModeProvider:

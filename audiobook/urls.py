@@ -4,6 +4,7 @@ from .views import (
     coqui_tts,
     home,
     music,
+    spotify_web_playback_token,
     stream_match,
     stream_prompt,
     stream_session,
@@ -16,6 +17,11 @@ from .views import (
 urlpatterns = [
     path("", home, name="home"),
     path("music", music, name="music"),
+    path(
+        "spotify/web-playback/token",
+        spotify_web_playback_token,
+        name="spotify-web-playback-token",
+    ),
     path("streams/match", stream_match, name="stream-match"),
     path("streams/<str:session_id>", stream_session, name="stream-session"),
     path("streams/<str:session_id>/prompt", stream_prompt, name="stream-prompt"),

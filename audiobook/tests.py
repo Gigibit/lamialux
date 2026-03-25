@@ -166,6 +166,7 @@ class HomeViewTests(TestCase):
                 "cover_image_url": "https://example.com/cover.jpg",
                 "external_url": "https://open.spotify.com/track/123",
                 "preview_url": "https://example.com/preview.mp3",
+                "spotify_uri": "spotify:track:123",
                 "provider": "SPOTIFY",
             },
         )()
@@ -209,6 +210,24 @@ class HomeViewTests(TestCase):
 
         self.assertEqual(response.status_code, 502)
         self.assertContains(response, "spotify boom", status_code=502)
+
+
+    @patch.dict("os.environ", {"SPOTIFY_WEB_PLAYBACK_ACCESS_TOKEN": "token-123"})
+    def test_spotify_web_playback_token_endpoint_success(self) -> None:
+        response = self.client.get("/spotify/web-playback/token")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertJSONEqual(response.content.decode("utf-8"), {"access_token": "token-123"})
+
+    def test_spotify_web_playback_token_endpoint_missing_token(self) -> None:
+        response = self.client.get("/spotify/web-playback/token")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertContains(
+            response,
+            "Spotify Web Playback token is not configured",
+            status_code=503,
+        )
 
     @patch("audiobook.views.httpx.Client")
     def test_whep_proxy_returns_502_when_upstream_times_out(self, http_client) -> None:

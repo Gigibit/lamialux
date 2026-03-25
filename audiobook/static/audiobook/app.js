@@ -14,6 +14,7 @@
   const sessionLabel = document.getElementById('stream-session-label');
   const items = Array.from(document.querySelectorAll('.chunk-list li'));
   const musicTrack = config.musicTrack || null;
+  const spotifyPlaybackTokenEndpoint = String(config.spotifyPlaybackTokenEndpoint || '/spotify/web-playback/token');
   const narrativeModeProvider = String(config.narrativeModeProvider || '').trim().toUpperCase();
   const sourceVideoUrl = String(config.sourceVideoUrl || '').trim();
   const isSourceNarrationProvider = narrativeModeProvider === 'YOUTUBE_SEARCH';
@@ -64,6 +65,9 @@
   let cancelled = false;
   let youtubePlayer = null;
   let youtubePlayerReadyPromise = null;
+  let spotifyPlayer = null;
+  let spotifyPlayerReadyPromise = null;
+  let spotifyDeviceId = "";
 
   const sentencePool = items
     .flatMap((item) => (item.dataset.text || '').match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [])
@@ -256,6 +260,127 @@
   const stopYouTubeSourceNarration = () => {
     if (youtubePlayer && typeof youtubePlayer.stopVideo === 'function') {
       youtubePlayer.stopVideo();
+    }
+  };
+
+  const fetchSpotifyPlaybackToken = async () => {
+    let response;
+    try {
+      response = await fetch(spotifyPlaybackTokenEndpoint, { method: 'GET', credentials: 'same-origin' });
+    } catch (error) {
+      logger.error('Spotify Web Playback SDK token request failed due to a network error.', { error, spotifyPlaybackTokenEndpoint });
+      throw new Error('Spotify token endpoint is unavailable.');
+    }
+
+    if (!response.ok) {
+      logger.error('Spotify Web Playback SDK token request failed with non-2xx status.', {
+        status: response.status,
+        spotifyPlaybackTokenEndpoint,
+      });
+      throw new Error(`Spotify token request failed with status ${response.status}.`);
+    }
+
+    const payload = await response.json().catch((error) => {
+      logger.error('Spotify Web Playback SDK token response could not be parsed as JSON.', { error });
+      throw new Error('Spotify token response is invalid JSON.');
+    });
+    const accessToken = String((payload && payload.access_token) || '').trim();
+    if (!accessToken) {
+      logger.error('Spotify Web Playback SDK token response did not include access_token.', { payload });
+      throw new Error('Spotify token response did not include access_token.');
+    }
+    return accessToken;
+  };
+
+  const ensureSpotifyPlayer = async () => {
+    if (spotifyPlayer && spotifyDeviceId) {
+      return { player: spotifyPlayer, deviceId: spotifyDeviceId };
+    }
+    if (!window.Spotify || typeof window.Spotify.Player !== 'function') {
+      logger.error('Spotify Web Playback SDK is unavailable on window.Spotify.', { hasSpotify: !!window.Spotify });
+      throw new Error('Spotify Web Playback SDK is unavailable.');
+    }
+    if (!spotifyPlayerReadyPromise) {
+      spotifyPlayerReadyPromise = new Promise((resolve, reject) => {
+        const player = new window.Spotify.Player({
+          name: 'LamiaLux Web Player',
+          volume: 0.8,
+          getOAuthToken: async (cb) => {
+            try {
+              cb(await fetchSpotifyPlaybackToken());
+            } catch (error) {
+              logger.error('Spotify Web Playback SDK getOAuthToken callback failed.', { error });
+            }
+          },
+        });
+        player.addListener('ready', ({ device_id: deviceId }) => {
+          spotifyDeviceId = deviceId;
+          spotifyPlayer = player;
+          resolve({ player, deviceId });
+        });
+        player.addListener('not_ready', ({ device_id: deviceId }) => {
+          logger.error('Spotify Web Playback SDK reported device not ready.', { deviceId });
+        });
+        player.addListener('initialization_error', ({ message }) => {
+          logger.error('Spotify Web Playback SDK initialization error.', { message });
+          reject(new Error(`Spotify initialization error: ${message}`));
+        });
+        player.addListener('authentication_error', ({ message }) => {
+          logger.error('Spotify Web Playback SDK authentication error.', { message });
+          reject(new Error(`Spotify authentication error: ${message}`));
+        });
+        player.addListener('account_error', ({ message }) => {
+          logger.error('Spotify Web Playback SDK account error.', { message });
+          reject(new Error(`Spotify account error: ${message}`));
+        });
+        player.addListener('playback_error', ({ message }) => {
+          logger.error('Spotify Web Playback SDK playback error.', { message });
+        });
+        player.connect().then((connected) => {
+          if (!connected) {
+            reject(new Error('Spotify player failed to connect.'));
+          }
+        }).catch((error) => {
+          logger.error('Spotify Web Playback SDK connect() rejected.', { error });
+          reject(error);
+        });
+      });
+    }
+    return spotifyPlayerReadyPromise;
+  };
+
+  const playSpotifyViaSdk = async () => {
+    if (!musicTrack || !musicTrack.spotify_uri) {
+      logger.error('Spotify SDK playback requested without spotify_uri.', { musicTrack });
+      throw new Error('Spotify track URI is missing.');
+    }
+    const [{ deviceId }, accessToken] = await Promise.all([
+      ensureSpotifyPlayer(),
+      fetchSpotifyPlaybackToken(),
+    ]);
+
+    let response;
+    try {
+      response = await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${encodeURIComponent(deviceId)}`, {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ uris: [musicTrack.spotify_uri] }),
+      });
+    } catch (error) {
+      logger.error('Spotify playback API request failed due to network error.', { error, deviceId, spotifyUri: musicTrack.spotify_uri });
+      throw new Error('Spotify playback API is unreachable.');
+    }
+
+    if (!response.ok) {
+      logger.error('Spotify playback API rejected the play request with non-2xx status.', {
+        status: response.status,
+        deviceId,
+        spotifyUri: musicTrack.spotify_uri,
+      });
+      throw new Error(`Spotify playback rejected with status ${response.status}.`);
     }
   };
   const summarizeResponse = async (response) => {
@@ -906,9 +1031,18 @@
       return;
     }
     if (!musicTrack.preview_url) {
-      logger.error('Spotify track playback requested without a preview URL.', { musicTrack });
-      setStatus('Spotify preview is unavailable for this track. Open it on Spotify instead.');
-      return;
+      logger.error('Spotify track playback requested without a preview URL. Falling back to Spotify Web Playback SDK.', { musicTrack });
+      await ensureStreamingReady();
+      try {
+        await playSpotifyViaSdk();
+        await pushPromptUpdate(`${musicTrack.title} by ${musicTrack.artist}`);
+        setStatus(`Playing ${musicTrack.title} by ${musicTrack.artist} using Spotify Web Playback SDK.`);
+        return;
+      } catch (error) {
+        logger.error('Spotify Web Playback SDK fallback failed to start track playback.', { error, musicTrack });
+        setStatus('Spotify playback is unavailable in-browser for this track. Open it on Spotify instead.');
+        throw error;
+      }
     }
     await ensureStreamingReady();
     setOverlay('LamiaLux visual music', `${musicTrack.title} · ${musicTrack.artist}`);
@@ -936,6 +1070,11 @@
     await stopMediaElement(coquiPlayer);
     await stopMediaElement(musicPlayer);
     stopYouTubeSourceNarration();
+    if (spotifyPlayer && typeof spotifyPlayer.pause === 'function') {
+      await spotifyPlayer.pause().catch((error) => {
+        logger.error('Spotify Web Playback SDK pause() failed while stopping media.', { error });
+      });
+    }
     detachLipAudioInput();
     stopCompositeFrameLoop();
     if (theiaSvgAnimatorId) {
