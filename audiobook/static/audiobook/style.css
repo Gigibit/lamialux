@@ -114,6 +114,7 @@ a { color: var(--accent); }
 
 .request-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .stream-layout { grid-template-columns: minmax(0, 1.4fr) minmax(320px, 0.8fr); }
+.stream-layout-book { grid-template-columns: minmax(0, 1fr); }
 label { display: grid; gap: 8px; }
 input,
 button {
@@ -196,6 +197,9 @@ button:disabled {
   height: auto;
   max-height: 100%;
 }
+.theia-form-deeper--compact {
+  width: min(70%, 460px) !important;
+}
 video,
 canvas {
   width: 100%;
@@ -203,6 +207,12 @@ canvas {
   border: 1px solid var(--border);
   background: #d7e1f0;
   margin-top: 16px;
+}
+#whep-player {
+  width: 100vw;
+  max-width: 100vw;
+  margin-left: calc(50% - 50vw);
+  margin-right: calc(50% - 50vw);
 }
 .chunk-list ol,
 .track-facts {
