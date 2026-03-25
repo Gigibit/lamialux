@@ -51,8 +51,6 @@
   let compositeCanvas = null;
   let compositeContext = null;
   let compositeFrameRequestId = null;
-  let compositeOffsetX = 0;
-  let compositeOffsetY = 0;
   let theiaSvgRefreshTimerId = null;
   let theiaSvgTexture = null;
   let theiaSvgTextureUrl = '';
@@ -372,17 +370,17 @@
       logger.error('Theia form lip animation failed because one or more SVG mouth paths are missing.');
       return;
     }
-    const oscillation = (Math.sin(timestampMs / 220) + 1) / 2;
+    const oscillation = (Math.sin(timestampMs / 145) + 1) / 2;
     const audioIntensity = getLipAudioIntensity();
-    const blend = Math.min(1, (oscillation * 0.55) + (audioIntensity * 0.9));
-    const width = 18 + (blend * 7.5);
-    const upperLift = 186 + (blend * 2.6);
-    const lowerDrop = 191 + (blend * 8);
+    const blend = Math.min(1, (oscillation * 0.7) + (audioIntensity * 1.25));
+    const width = 16 + (blend * 13.5);
+    const upperLift = 188 + (blend * 2.3);
+    const lowerDrop = 192 + (blend * 13.8);
     const cornerLeft = 150 - width;
     const cornerRight = 150 + width;
-    mouthUpper.setAttribute('d', `M${cornerLeft} 190 Q150 ${upperLift} ${cornerRight} 190 Q150 ${192 + (blend * 1.5)} ${cornerLeft} 190 Z`);
-    mouthLower.setAttribute('d', `M${cornerLeft} 190 Q150 ${lowerDrop} ${cornerRight} 190 Q150 ${191 + (blend * 3.2)} ${cornerLeft} 190 Z`);
-    mouthInside.setAttribute('d', `M${cornerLeft + 2} 190 Q150 ${189 + (blend * 5.8)} ${cornerRight - 2} 190 Q150 ${190 + (blend * 4.5)} ${cornerLeft + 2} 190 Z`);
+    mouthUpper.setAttribute('d', `M${cornerLeft} 190 Q150 ${upperLift} ${cornerRight} 190 Q150 ${192 + (blend * 2.8)} ${cornerLeft} 190 Z`);
+    mouthLower.setAttribute('d', `M${cornerLeft} 190 Q150 ${lowerDrop} ${cornerRight} 190 Q150 ${192 + (blend * 6.6)} ${cornerLeft} 190 Z`);
+    mouthInside.setAttribute('d', `M${cornerLeft + 1} 190 Q150 ${189 + (blend * 12.8)} ${cornerRight - 1} 190 Q150 ${191 + (blend * 8.4)} ${cornerLeft + 1} 190 Z`);
   };
 
   const startTheiaSvgAnimator = () => {
@@ -403,7 +401,19 @@
       return;
     }
     try {
-      const serializedSvg = new XMLSerializer().serializeToString(theiaFormSvg);
+      const renderedRect = theiaFormSvg.getBoundingClientRect();
+      if (!renderedRect.width || !renderedRect.height) {
+        logger.error('Theia SVG texture refresh skipped because the rendered SVG size is zero.', {
+          renderedRect,
+        });
+        return;
+      }
+      const textureSvg = theiaFormSvg.cloneNode(true);
+      textureSvg.setAttribute('width', `${renderedRect.width}`);
+      textureSvg.setAttribute('height', `${renderedRect.height}`);
+      textureSvg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+      textureSvg.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+      const serializedSvg = new XMLSerializer().serializeToString(textureSvg);
       const blob = new Blob([serializedSvg], { type: 'image/svg+xml;charset=utf-8' });
       const nextUrl = URL.createObjectURL(blob);
       if (!theiaSvgTexture) {
@@ -436,53 +446,44 @@
     }
   };
 
-  const startCompositeFrameLoop = (options = {}) => {
+  const startCompositeFrameLoop = () => {
     if (!compositeCanvas || !compositeContext) {
       logger.error('Cannot start the composite canvas loop because the composition canvas context is missing.');
       return;
     }
     stopCompositeFrameLoop();
-    const { speed = 0.08 } = options;
-    const lerp = (start, end, amount) => start * (1 - amount) + end * amount;
+    const mapRectToCanvasSpace = (sourceRect, canvasRect) => {
+      const widthScale = compositeCanvas.width / (canvasRect.width || 1);
+      const heightScale = compositeCanvas.height / (canvasRect.height || 1);
+      return {
+        x: (sourceRect.left - canvasRect.left) * widthScale,
+        y: (sourceRect.top - canvasRect.top) * heightScale,
+        width: sourceRect.width * widthScale,
+        height: sourceRect.height * heightScale,
+      };
+    };
 
     const draw = () => {
-      const rect1 = animationCanvas.getBoundingClientRect();
-      const rect2 = theiaFormSvg ? theiaFormSvg.getBoundingClientRect() : rect1;
-
-      const minX = Math.min(rect1.left, rect2.left);
-      const minY = Math.min(rect1.top, rect2.top);
-      const contentWidth = Math.max(rect1.right, rect2.right) - minX;
-      const contentHeight = Math.max(rect1.bottom, rect2.bottom) - minY;
-
-      const targetX = (window.innerWidth / 2) - (contentWidth / 2);
-      const targetY = (window.innerHeight / 2) - (contentHeight / 2);
-
-      compositeOffsetX = lerp(compositeOffsetX, targetX, speed);
-      compositeOffsetY = lerp(compositeOffsetY, targetY, speed);
+      if (compositeCanvas.width !== animationCanvas.width || compositeCanvas.height !== animationCanvas.height) {
+        compositeCanvas.width = animationCanvas.width;
+        compositeCanvas.height = animationCanvas.height;
+      }
+      const animationRect = animationCanvas.getBoundingClientRect();
+      const theiaRect = theiaFormSvg ? theiaFormSvg.getBoundingClientRect() : animationRect;
+      const mappedTheiaRect = mapRectToCanvasSpace(theiaRect, animationRect);
 
       compositeContext.clearRect(0, 0, compositeCanvas.width, compositeCanvas.height);
-      compositeContext.save();
-      compositeContext.translate(compositeOffsetX, compositeOffsetY);
-
-      compositeContext.drawImage(
-        animationCanvas,
-        rect1.left - minX,
-        rect1.top - minY,
-        rect1.width,
-        rect1.height,
-      );
+      compositeContext.drawImage(animationCanvas, 0, 0, compositeCanvas.width, compositeCanvas.height);
 
       if (theiaSvgTexture && theiaSvgTexture.complete) {
         compositeContext.drawImage(
           theiaSvgTexture,
-          rect2.left - minX,
-          rect2.top - minY,
-          rect2.width,
-          rect2.height,
+          mappedTheiaRect.x,
+          mappedTheiaRect.y,
+          mappedTheiaRect.width,
+          mappedTheiaRect.height,
         );
       }
-
-      compositeContext.restore();
       compositeFrameRequestId = window.requestAnimationFrame(draw);
     };
 
