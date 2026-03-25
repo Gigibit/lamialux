@@ -60,6 +60,10 @@
   let lipAudioSourceNode = null;
   let lipAudioData = null;
   let lipAudioElement = null;
+  let lastLipRandomUpdateMs = 0;
+  let lipRandomVerticalBoost = 0;
+  let lipRandomWidthOffset = 0;
+  let lipRandomInsideOffset = 0;
   let playbackToken = 0;
   let currentIndex = 0;
   let cancelled = false;
@@ -477,19 +481,26 @@
       logger.error('Theia form lip animation failed because one or more SVG mouth paths are missing.');
       return;
     }
-    const oscillation = (Math.sin(timestampMs / 105) + 1) / 2;
+    if ((timestampMs - lastLipRandomUpdateMs) > 75) {
+      lastLipRandomUpdateMs = timestampMs;
+      lipRandomVerticalBoost = (Math.random() * 0.28) - 0.04;
+      lipRandomWidthOffset = (Math.random() * 0.16) - 0.08;
+      lipRandomInsideOffset = (Math.random() * 0.24) - 0.08;
+    }
+    const oscillation = (Math.sin(timestampMs / 88) + 1) / 2;
     const audioIntensity = getLipAudioIntensity();
-    const speechPulse = Math.min(1, (audioIntensity * 1.9) + (oscillation * 0.45));
+    const speechPulse = Math.min(1, (audioIntensity * 2.05) + (oscillation * 0.62));
     const jawDrop = Math.pow(speechPulse, 0.72);
     const lipTension = 1 - (jawDrop * 0.7);
-    const width = 17 + (lipTension * 7.5);
-    const upperLift = 188 + (jawDrop * 4.8);
-    const lowerDrop = 195 + (jawDrop * 42);
+    const width = 17 + (lipTension * 7.5) + (lipRandomWidthOffset * 6);
+    const verticalExpansion = Math.max(0, jawDrop + lipRandomVerticalBoost);
+    const upperLift = 187 + (verticalExpansion * 8.8);
+    const lowerDrop = 195 + (verticalExpansion * 67);
     const cornerLeft = 150 - width;
     const cornerRight = 150 + width;
-    mouthUpper.setAttribute('d', `M${cornerLeft} 190 Q150 ${upperLift} ${cornerRight} 190 Q150 ${193 + (jawDrop * 2.8)} ${cornerLeft} 190 Z`);
-    mouthLower.setAttribute('d', `M${cornerLeft} 190 Q150 ${lowerDrop} ${cornerRight} 190 Q150 ${194 + (jawDrop * 20.2)} ${cornerLeft} 190 Z`);
-    mouthInside.setAttribute('d', `M${cornerLeft + 1} 190 Q150 ${191 + (jawDrop * 32)} ${cornerRight - 1} 190 Q150 ${194 + (jawDrop * 21.8)} ${cornerLeft + 1} 190 Z`);
+    mouthUpper.setAttribute('d', `M${cornerLeft} 190 Q150 ${upperLift} ${cornerRight} 190 Q150 ${193 + (verticalExpansion * 4.2)} ${cornerLeft} 190 Z`);
+    mouthLower.setAttribute('d', `M${cornerLeft} 190 Q150 ${lowerDrop} ${cornerRight} 190 Q150 ${194 + (verticalExpansion * 31.6)} ${cornerLeft} 190 Z`);
+    mouthInside.setAttribute('d', `M${cornerLeft + 1} 190 Q150 ${191 + (verticalExpansion * 52) + (lipRandomInsideOffset * 4)} ${cornerRight - 1} 190 Q150 ${194 + (verticalExpansion * 33.8)} ${cornerLeft + 1} 190 Z`);
   };
 
   const startTheiaSvgAnimator = () => {
