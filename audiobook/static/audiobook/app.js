@@ -16,6 +16,7 @@
   const musicTrack = config.musicTrack || null;
   const narrativeModeProvider = String(config.narrativeModeProvider || '').trim().toUpperCase();
   const narrativeSourceVideo = document.getElementById('narrative-source-video');
+  const sourceVideoUrl = String(config.sourceVideoUrl || '').trim();
   const usesSourceNarration = narrativeModeProvider === 'YOUTUBE_SEARCH';
   const PROMPT_UPDATE_INTERVAL_MS = 5000;
   const logger = window.logger && typeof window.logger.error === 'function' ? window.logger : console;
@@ -75,6 +76,23 @@
     ? sentencePool[Math.floor(Math.random() * sentencePool.length)]
     : '';
   const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+  const isLikelyDirectMediaUrl = (url) => /\.(mp4|m4v|mov|webm|m3u8|mp3|m4a|ogg|wav)(\?|#|$)/i.test(url);
+  const isUnsupportedNarrativeSourceUrl = (url) => {
+    if (!url) {
+      return false;
+    }
+    try {
+      const parsed = new URL(url);
+      const host = parsed.hostname.toLowerCase();
+      if (host.includes('youtube.com') || host.includes('youtu.be')) {
+        return true;
+      }
+    } catch (error) {
+      logger.error('Narrative source URL parsing failed.', { error, sourceVideoUrl: url });
+      return true;
+    }
+    return !isLikelyDirectMediaUrl(url);
+  };
   const summarizeResponse = async (response) => {
     const body = await response.text();
     return {
@@ -192,6 +210,25 @@
     }
     compositeStream = new MediaStream([...canvasStream.getVideoTracks(), ...(audioStream ? audioStream.getAudioTracks() : [])]);
     return compositeStream;
+  };
+
+  const prepareNarrativeSourceVideo = () => {
+    if (!usesSourceNarration || !narrativeSourceVideo || !sourceVideoUrl) {
+      return;
+    }
+    if (isUnsupportedNarrativeSourceUrl(sourceVideoUrl)) {
+      logger.error('Unsupported narrative source URL detected; direct browser media playback is required.', {
+        narrativeModeProvider,
+        sourceVideoUrl,
+      });
+      setStatus('Source narration URL is not a direct media file. Use a direct MP4/WebM URL.');
+      setOverlay(
+        'LamiaLux source narration',
+        'The selected source is a web page URL (for example YouTube watch) and cannot be played as <video>.',
+      );
+      return;
+    }
+    narrativeSourceVideo.src = sourceVideoUrl;
   };
 
   const refreshStreamSessionAfterWhip = async () => {
@@ -355,12 +392,21 @@
     startPromptUpdates();
 
     if (usesSourceNarration) {
-      if (!narrativeSourceVideo || !narrativeSourceVideo.src) {
+      if (!narrativeSourceVideo || !sourceVideoUrl) {
         logger.error('Source narration provider is enabled but no narrative source video is available.', {
           narrativeModeProvider,
           hasNarrativeSourceVideoElement: Boolean(narrativeSourceVideo),
+          sourceVideoUrl,
         });
         setStatus('Narrative source video is missing for this provider.');
+        return;
+      }
+      if (isUnsupportedNarrativeSourceUrl(sourceVideoUrl)) {
+        logger.error('Source narration playback blocked because the URL is not a direct media resource.', {
+          narrativeModeProvider,
+          sourceVideoUrl,
+        });
+        setStatus('Source narration URL is unsupported. Provide a direct MP4/WebM media URL.');
         return;
       }
       setStatus('Playing source narration video...');
@@ -488,5 +534,6 @@
   });
   stopButton.addEventListener('click', () => { void stopEverything(); });
 
+  prepareNarrativeSourceVideo();
   setOverlay('LamiaLux ready', page === 'music' ? 'Search a track to prepare the visual music canvas.' : 'Search a PDF to prepare the book canvas.');
 })();

@@ -101,7 +101,6 @@
             preload="metadata"
             playsinline
             crossorigin="anonymous"
-            {% if stream and stream.source_video_url %}src="{{ stream.source_video_url }}"{% endif %}
             {% if not stream or not stream.source_video_url %}hidden{% endif %}
           ></video>
           <audio id="coqui-player" preload="none" hidden></audio>
@@ -187,6 +186,7 @@
         page: "{{ page }}",
         hasPreparedStream: {{ stream|yesno:'true,false' }},
         narrativeModeProvider: "{{ narrative_mode_provider|default:'' }}",
+        sourceVideoUrl: "{{ stream.source_video_url|default:''|escapejs }}",
         musicTrack: JSON.parse(document.getElementById('music-track-data').textContent),
       };
     </script>
