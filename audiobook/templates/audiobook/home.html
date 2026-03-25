@@ -126,6 +126,66 @@
               <p class="eyebrow">Caos canvas</p>
               <div class="canvas-shell">
                 <canvas id="theia-canvas" width="1280" height="720"></canvas>
+                <div id="theia-form" aria-hidden="true">
+                  <svg viewBox="0 50 300 300" xmlns="http://www.w3.org/2000/svg" id="theia-form-deeper">
+                    <defs>
+                      <linearGradient id="blondeGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+                        <stop offset="0%" stop-color="#fffacd" />
+                        <stop offset="50%" stop-color="#fff" />
+                        <stop offset="100%" stop-color="#fffacd" />
+                      </linearGradient>
+                      <radialGradient id="eyeGradient" cx="50%" cy="50%" r="50%" gradientTransform="rotate(0)">
+                        <stop offset="0%" stop-color="#6b4f2c" />
+                        <stop offset="70%" stop-color="#4ca64c">
+                          <animate attributeName="stop-color" values="#4ca64c; #66ff66; #1db954; #4ca64c" dur="6s" repeatCount="indefinite" />
+                        </stop>
+                        <stop offset="100%" stop-color="#3b2f1b" />
+                        <animateTransform attributeName="gradientTransform" type="rotate" from="0 0.5 0.5" to="360 0.5 0.5" dur="12s" repeatCount="indefinite" />
+                      </radialGradient>
+                    </defs>
+                    <path d="M90 160 Q100 60, 150 50 Q200 60, 210 160 Q205 250, 150 300 Q95 250, 90 160 Z" fill="url(#blondeGradient)" class="stroke" />
+                    <g id="faceGroup">
+                      <animateTransform attributeName="transform" type="translate" values="0,0; 0,-0.5; 0,0; 0,-3; 0,0" dur="8s" repeatCount="indefinite" additive="sum" />
+                      <ellipse cx="150" cy="155" rx="50" ry="80" fill="#ffdcb0" stroke="#000" stroke-width="1" />
+                      <defs>
+                        <clipPath id="leftEyeClip">
+                          <path d="M113 145 Q125 138 137 145 Q125 152 113 145 Z" />
+                        </clipPath>
+                        <clipPath id="rightEyeClip">
+                          <path d="M163 145 Q175 138 187 145 Q175 152 163 145 Z" />
+                        </clipPath>
+                      </defs>
+                      <g clip-path="url(#leftEyeClip)">
+                        <ellipse cx="125" cy="145" rx="12" ry="7.5" fill="#fff" />
+                        <ellipse id="leftEye" cx="125" cy="145" rx="7" ry="5" fill="url(#eyeGradient)" />
+                        <circle cx="125" cy="145" r="2.2" fill="#000" />
+                        <circle cx="123.8" cy="143.8" r="1.4" fill="#fff" class="pupil-white" />
+                      </g>
+                      <path d="M113 145 Q125 138 137 145" fill="none" stroke="#3b1a0d" stroke-width="1.6" />
+                      <path d="M113 146 Q125 152 137 146" fill="none" stroke="#c68c5a" stroke-width="1" opacity="0.6" />
+                      <g clip-path="url(#rightEyeClip)">
+                        <ellipse cx="175" cy="145" rx="12" ry="7.5" fill="#fff" />
+                        <ellipse id="rightEye" cx="175" cy="145" rx="7" ry="5" fill="url(#eyeGradient)" />
+                        <circle cx="175" cy="145" r="2.2" fill="#000" />
+                        <circle cx="173.8" cy="143.8" r="1.4" fill="#fff" class="pupil-white" />
+                      </g>
+                      <path d="M163 145 Q175 138 187 145" fill="none" stroke="#3b1a0d" stroke-width="1.6" />
+                      <path d="M163 146 Q175 152 187 146" fill="none" stroke="#c68c5a" stroke-width="1" opacity="0.6" />
+                      <path id="leftBrow" d="M115 132 Q125 124, 135 132" stroke="#3b1a0d" stroke-width="2" fill="none" />
+                      <path id="rightBrow" d="M165 132 Q175 124, 185 132" stroke="#3b1a0d" stroke-width="2" fill="none" />
+                      <path id="nose" d="M150 150 Q150 160, 148 165" stroke="#c68c5a" stroke-width="2" fill="none" />
+                      <path id="mouthUpper" fill="#e38a72" stroke="#c04a30" stroke-width="3" />
+                      <path id="mouthLower" fill="#e38a72" stroke="#c04a30" stroke-width="3" />
+                      <path id="mouthInside" fill="#a12c2c" />
+                    </g>
+                    <g id="hair">
+                      <path d="M95 150 Q125 40, 150 50 Q175 45, 205 150 Q120 90, 150 110 Q110 120, 95 150 Z" fill="url(#blondeGradient)" class="stroke" />
+                      <path d="M130 75 Q150 45, 170 75" fill="url(#blondeGradient)" class="stroke" />
+                      <path d="M120 85 Q150 50, 180 85" fill="url(#blondeGradient)" class="stroke" />
+                      <path d="M140 80 Q150 55, 160 80" fill="url(#blondeGradient)" class="stroke" />
+                    </g>
+                  </svg>
+                </div>
                 <div id="theia-canvas-overlay" class="canvas-overlay" aria-live="polite"></div>
               </div>
             </div>
