@@ -46,23 +46,17 @@ class HomeViewTests(TestCase):
         self.assertContains(response, 'id="theia-canvas"')
         self.assertNotContains(response, 'id="narration-canvas"')
         self.assertContains(response, "Canvas preview")
-        self.assertContains(
-            response,
-            "Canvas ready. Search and prepare a song to enable playback controls.",
-        )
         self.assertContains(response, 'id="fullscreen-output"')
         self.assertContains(response, 'id="coqui-player"')
         self.assertContains(response, 'id="narrative-source-video"')
         self.assertNotContains(response, "Open downloaded PDF source")
 
-    @patch("audiobook.views.PromptStreamUpdater.update_prompt")
     @patch("audiobook.views.DaydreamClient.create_livepeer_stream_session")
     @patch("audiobook.views.WebResearchNarrativeClient.build_experience")
     def test_start_book_stream_success(
         self,
         build_experience,
         create_livepeer_stream_session,
-        update_prompt,
     ) -> None:
         build_experience.return_value = type(
             "Experience",
@@ -111,16 +105,12 @@ class HomeViewTests(TestCase):
             "Mouth. Real Representation. Dune · Chapter 1. REAL, NOT drawn, NOT blurry, "
             "NOT low quality, NOT flat, NOT 2d"
         )
-        update_prompt.assert_called_once()
-
-    @patch("audiobook.views.PromptStreamUpdater.update_prompt")
     @patch("audiobook.views.DaydreamClient.create_livepeer_stream_session")
     @patch("audiobook.views.NarrativeClientFactory.create")
     def test_youtube_mode_hides_narrative_source_video_src(
         self,
         create_client,
         create_livepeer_stream_session,
-        _update_prompt,
     ) -> None:
         create_client.return_value.build_experience.return_value = type(
             "Experience",
@@ -290,7 +280,6 @@ class HomeViewTests(TestCase):
             prompt="Random sentence from the book.",
         )
 
-    @patch("audiobook.views.PromptStreamUpdater.update_prompt")
     @patch("audiobook.views.CoquiTtsClient.synthesize")
     @patch("audiobook.views.DaydreamClient.create_livepeer_stream_session")
     @patch("audiobook.views.NarrativeClientFactory.create")
@@ -299,7 +288,6 @@ class HomeViewTests(TestCase):
         create_narrative_client,
         create_livepeer_stream_session,
         synthesize,
-        _update_prompt,
     ) -> None:
         create_narrative_client.return_value.build_experience.return_value = type(
             "Experience",
@@ -352,14 +340,12 @@ class HomeViewTests(TestCase):
         synthesize.assert_called_once()
         audio_path.unlink(missing_ok=True)
 
-    @patch("audiobook.views.PromptStreamUpdater.update_prompt")
     @patch("audiobook.views.NarrativeClientFactory.create")
     @patch("audiobook.views.DaydreamClient.create_livepeer_stream_session")
     def test_source_media_serves_prepared_video_audio(
         self,
         create_livepeer_stream_session,
         create_narrative_client,
-        _update_prompt,
     ) -> None:
         media_path = Path("storage/test-source.mp4")
         media_path.parent.mkdir(parents=True, exist_ok=True)

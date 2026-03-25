@@ -455,11 +455,6 @@ def _handle_book_start(
         experience = NarrativeClientFactory.create().build_experience(query)
         prompt = _build_book_stream_prompt(experience.title)
         livepeer_stream_session = DaydreamClient().create_livepeer_stream_session(prompt)
-        PromptStreamUpdater().update_prompt(
-            upstream_stream_id=livepeer_stream_session.upstream_stream_id
-            or livepeer_stream_session.session_id,
-            prompt=prompt,
-        )
     except UpstreamServiceError as exc:
         logger.error("Failed to start book stream for query '%s': %s", query, exc)
         context["error"] = str(exc)

@@ -22,7 +22,7 @@
   const STORY_PROMPT_DELTA_SECONDS = Number(config.updateStoryPromptDeltaSeconds || 10);
   const logger = window.logger && typeof window.logger.error === 'function' ? window.logger : console;
 
-  if (!stopButton || !statusEl || !animationCanvas || !video || !sessionLabel) {
+  if (!stopButton || !animationCanvas || !video || !sessionLabel) {
     return;
   }
 
@@ -79,7 +79,11 @@
     .map((sentence) => sentence.trim())
     .filter((sentence) => sentence.length > 20);
 
-  const setStatus = (message) => { statusEl.textContent = message; };
+  const setStatus = (message) => {
+    if (statusEl) {
+      statusEl.textContent = message;
+    }
+  };
   const setOverlay = (title, text) => {
     setStatus(`${title} — ${text}`);
   };
