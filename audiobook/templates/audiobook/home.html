@@ -111,7 +111,7 @@
                 {% endif %}
               </div>
             {% endif %}
-            <div>
+            <div hidden>
               <p class="eyebrow">Caos canvas</p>
               <div class="canvas-shell">
                 <canvas id="theia-canvas" width="1280" height="720"></canvas>
@@ -132,10 +132,10 @@
                         <animateTransform attributeName="gradientTransform" type="rotate" from="0 0.5 0.5" to="360 0.5 0.5" dur="12s" repeatCount="indefinite" />
                       </radialGradient>
                     </defs>
-                    <path d="M98 160 Q108 82 150 72 Q192 82 202 160 Q198 236 150 286 Q102 236 98 160 Z" fill="url(#blondeGradient)" class="stroke" />
+                    <path d="M90 160 Q100 60, 150 50 Q200 60, 210 160 Q205 250, 150 300 Q95 250, 90 160 Z" fill="url(#blondeGradient)" class="stroke" />
                     <g id="faceGroup">
                       <animateTransform attributeName="transform" type="translate" values="0,0; 0,-0.5; 0,0; 0,-3; 0,0" dur="8s" repeatCount="indefinite" additive="sum" />
-                      <ellipse cx="150" cy="165" rx="48" ry="72" fill="#ffdcb0" stroke="#000" stroke-width="1" />
+                      <ellipse cx="150" cy="155" rx="50" ry="80" fill="#ffdcb0" stroke="#000" stroke-width="1" />
                       <defs>
                         <clipPath id="leftEyeClip">
                           <path d="M113 145 Q125 138 137 145 Q125 152 113 145 Z" />
@@ -160,16 +160,18 @@
                       </g>
                       <path d="M163 145 Q175 138 187 145" fill="none" stroke="#3b1a0d" stroke-width="1.6" />
                       <path d="M163 146 Q175 152 187 146" fill="none" stroke="#c68c5a" stroke-width="1" opacity="0.6" />
-                      <path id="leftBrow" d="M114 132 Q125 126 136 132" stroke="#3b1a0d" stroke-width="1.6" fill="none" stroke-linecap="round" />
-                      <path id="rightBrow" d="M164 132 Q175 126 186 132" stroke="#3b1a0d" stroke-width="1.6" fill="none" stroke-linecap="round" />
-                      <path id="nose" d="M150 151 Q151 161 148 167" stroke="#c68c5a" stroke-width="1.6" fill="none" stroke-linecap="round" />
+                      <path id="leftBrow" d="M115 132 Q125 124, 135 132" stroke="#3b1a0d" stroke-width="2" fill="none" />
+                      <path id="rightBrow" d="M165 132 Q175 124, 185 132" stroke="#3b1a0d" stroke-width="2" fill="none" />
+                      <path id="nose" d="M150 150 Q150 160, 148 165" stroke="#c68c5a" stroke-width="2" fill="none" />
                       <path id="mouthUpper" fill="#e38a72" stroke="#c04a30" stroke-width="3" />
                       <path id="mouthLower" fill="#e38a72" stroke="#c04a30" stroke-width="3" />
                       <path id="mouthInside" fill="#a12c2c" />
                     </g>
                     <g id="hair">
-                      <path d="M104 156 Q118 88 150 74 Q182 88 196 156 Q186 128 150 120 Q114 128 104 156 Z" fill="url(#blondeGradient)" class="stroke" />
-                      <path d="M122 92 Q150 66 178 92" fill="none" stroke="#f0d79a" stroke-width="3" stroke-linecap="round" opacity="0.75" />
+                      <path d="M95 150 Q125 40, 150 50 Q175 45, 205 150 Q120 90, 150 110 Q110 120, 95 150 Z" fill="url(#blondeGradient)" class="stroke" />
+                      <path d="M130 75 Q150 45, 170 75" fill="url(#blondeGradient)" class="stroke" />
+                      <path d="M120 85 Q150 50, 180 85" fill="url(#blondeGradient)" class="stroke" />
+                      <path d="M140 80 Q150 55, 160 80" fill="url(#blondeGradient)" class="stroke" />
                     </g>
                   </svg>
                 </div>
