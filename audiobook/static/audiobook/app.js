@@ -51,7 +51,9 @@
   let storyPromptTimerId = null;
   let compositeCanvas = null;
   let compositeContext = null;
-  let compositeFrameTimerId = null;
+  let compositeFrameRequestId = null;
+  let compositeOffsetX = 0;
+  let compositeOffsetY = 0;
   let theiaSvgRefreshTimerId = null;
   let theiaSvgTexture = null;
   let theiaSvgTextureUrl = '';
@@ -434,9 +436,9 @@
   };
 
   const stopCompositeFrameLoop = () => {
-    if (compositeFrameTimerId) {
-      window.clearInterval(compositeFrameTimerId);
-      compositeFrameTimerId = null;
+    if (compositeFrameRequestId) {
+      window.cancelAnimationFrame(compositeFrameRequestId);
+      compositeFrameRequestId = null;
     }
     if (theiaSvgRefreshTimerId) {
       window.clearInterval(theiaSvgRefreshTimerId);
@@ -444,28 +446,57 @@
     }
   };
 
-  const startCompositeFrameLoop = () => {
+  const startCompositeFrameLoop = (options = {}) => {
     if (!compositeCanvas || !compositeContext) {
       logger.error('Cannot start the composite canvas loop because the composition canvas context is missing.');
       return;
     }
     stopCompositeFrameLoop();
-    compositeFrameTimerId = window.setInterval(() => {
+    const { speed = 0.08 } = options;
+    const lerp = (start, end, amount) => start * (1 - amount) + end * amount;
+
+    const draw = () => {
+      const rect1 = animationCanvas.getBoundingClientRect();
+      const rect2 = theiaFormSvg ? theiaFormSvg.getBoundingClientRect() : rect1;
+
+      const minX = Math.min(rect1.left, rect2.left);
+      const minY = Math.min(rect1.top, rect2.top);
+      const contentWidth = Math.max(rect1.right, rect2.right) - minX;
+      const contentHeight = Math.max(rect1.bottom, rect2.bottom) - minY;
+
+      const targetX = (window.innerWidth / 2) - (contentWidth / 2);
+      const targetY = (window.innerHeight / 2) - (contentHeight / 2);
+
+      compositeOffsetX = lerp(compositeOffsetX, targetX, speed);
+      compositeOffsetY = lerp(compositeOffsetY, targetY, speed);
+
       compositeContext.clearRect(0, 0, compositeCanvas.width, compositeCanvas.height);
-      compositeContext.drawImage(animationCanvas, 0, 0, compositeCanvas.width, compositeCanvas.height);
+      compositeContext.save();
+      compositeContext.translate(compositeOffsetX, compositeOffsetY);
+
+      compositeContext.drawImage(
+        animationCanvas,
+        rect1.left - minX,
+        rect1.top - minY,
+        rect1.width,
+        rect1.height,
+      );
+
       if (theiaSvgTexture && theiaSvgTexture.complete) {
-        const baseWidth = Number(theiaSvgTexture.naturalWidth) || 300;
-        const baseHeight = Number(theiaSvgTexture.naturalHeight) || 300;
-        const maxWidth = compositeCanvas.width * 0.3;
-        const maxHeight = compositeCanvas.height * 0.6;
-        const scale = Math.min(maxWidth / baseWidth, maxHeight / baseHeight);
-        const drawWidth = baseWidth * scale;
-        const drawHeight = baseHeight * scale;
-        const drawX = (compositeCanvas.width - drawWidth) / 2;
-        const drawY = (compositeCanvas.height - drawHeight) / 2;
-        compositeContext.drawImage(theiaSvgTexture, drawX, drawY, drawWidth, drawHeight);
+        compositeContext.drawImage(
+          theiaSvgTexture,
+          rect2.left - minX,
+          rect2.top - minY,
+          rect2.width,
+          rect2.height,
+        );
       }
-    }, 33);
+
+      compositeContext.restore();
+      compositeFrameRequestId = window.requestAnimationFrame(draw);
+    };
+
+    draw();
   };
 
   const stopStoryPromptUpdates = () => {
@@ -582,7 +613,7 @@
       theiaSvgRefreshTimerId = window.setInterval(refreshTheiaSvgTexture, 120);
       startCompositeFrameLoop();
     }
-    if (!compositeFrameTimerId) {
+    if (!compositeFrameRequestId) {
       logger.error('Composite frame loop was not running while preparing the stream; restarting the canvas compositor.');
       startCompositeFrameLoop();
     }
