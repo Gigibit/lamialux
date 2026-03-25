@@ -227,6 +227,113 @@ class HomeViewTests(TestCase):
             status_code=503,
         )
 
+    @patch.dict(
+        "os.environ",
+        {
+            "SPOTIFY_CLIENT_ID": "spotify-client-id",
+            "SPOTIFY_CLIENT_SECRET": "spotify-client-secret",
+            "SPOTIFY_REDIRECT_URI": "https://example.com/music",
+        },
+    )
+    @patch("audiobook.views.httpx.Client")
+    def test_spotify_web_playback_token_endpoint_exchanges_authorization_code(
+        self, http_client
+    ) -> None:
+        class DummyResponse:
+            status_code = 200
+
+            @staticmethod
+            def json():
+                return {
+                    "access_token": "fresh-access-token",
+                    "refresh_token": "fresh-refresh-token",
+                    "expires_in": 3600,
+                }
+
+        class DummyClient:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+            def post(self, url, *, data, auth, headers):
+                self.url = url
+                self.data = data
+                self.auth = auth
+                self.headers = headers
+                return DummyResponse()
+
+        dummy_client = DummyClient()
+        http_client.return_value = dummy_client
+
+        response = self.client.get("/spotify/web-playback/token?code=auth-code-123")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertJSONEqual(
+            response.content.decode("utf-8"), {"access_token": "fresh-access-token"}
+        )
+        self.assertEqual(dummy_client.url, "https://accounts.spotify.com/api/token")
+        self.assertEqual(
+            dummy_client.data,
+            {
+                "grant_type": "authorization_code",
+                "code": "auth-code-123",
+                "redirect_uri": "https://example.com/music",
+            },
+        )
+        self.assertEqual(dummy_client.auth, ("spotify-client-id", "spotify-client-secret"))
+        self.assertEqual(
+            self.client.session["spotify_web_playback_refresh_token"], "fresh-refresh-token"
+        )
+
+    @patch.dict(
+        "os.environ",
+        {
+            "SPOTIFY_CLIENT_ID": "spotify-client-id",
+            "SPOTIFY_CLIENT_SECRET": "spotify-client-secret",
+        },
+    )
+    @patch("audiobook.views.httpx.Client")
+    def test_spotify_web_playback_token_endpoint_uses_refresh_token_when_available(
+        self, http_client
+    ) -> None:
+        session = self.client.session
+        session["spotify_web_playback_refresh_token"] = "saved-refresh-token"
+        session.save()
+
+        class DummyResponse:
+            status_code = 200
+
+            @staticmethod
+            def json():
+                return {"access_token": "refresh-access-token", "expires_in": 3600}
+
+        class DummyClient:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+            def post(self, url, *, data, auth, headers):
+                self.data = data
+                return DummyResponse()
+
+        dummy_client = DummyClient()
+        http_client.return_value = dummy_client
+
+        response = self.client.get("/spotify/web-playback/token")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertJSONEqual(
+            response.content.decode("utf-8"), {"access_token": "refresh-access-token"}
+        )
+        self.assertEqual(
+            dummy_client.data,
+            {"grant_type": "refresh_token", "refresh_token": "saved-refresh-token"},
+        )
+
     @patch("audiobook.views.httpx.Client")
     def test_whep_proxy_returns_502_when_upstream_times_out(self, http_client) -> None:
         STREAM_SESSIONS["abc"] = StreamSession(

@@ -73,6 +73,7 @@
   let spotifyPlayer = null;
   let spotifyPlayerReadyPromise = null;
   let spotifyDeviceId = "";
+  let spotifyAuthorizationCode = new URLSearchParams(window.location.search).get('code') || '';
 
   const sentencePool = items
     .flatMap((item) => (item.dataset.text || '').match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [])
@@ -273,11 +274,18 @@
   };
 
   const fetchSpotifyPlaybackToken = async () => {
+    const tokenEndpointUrl = new URL(spotifyPlaybackTokenEndpoint, window.location.origin);
+    if (spotifyAuthorizationCode) {
+      tokenEndpointUrl.searchParams.set('code', spotifyAuthorizationCode);
+    }
     let response;
     try {
-      response = await fetch(spotifyPlaybackTokenEndpoint, { method: 'GET', credentials: 'same-origin' });
+      response = await fetch(tokenEndpointUrl.toString(), { method: 'GET', credentials: 'same-origin' });
     } catch (error) {
-      logger.error('Spotify Web Playback SDK token request failed due to a network error.', { error, spotifyPlaybackTokenEndpoint });
+      logger.error('Spotify Web Playback SDK token request failed due to a network error.', {
+        error,
+        spotifyPlaybackTokenEndpoint,
+      });
       throw new Error('Spotify token endpoint is unavailable.');
     }
 
@@ -297,6 +305,12 @@
     if (!accessToken) {
       logger.error('Spotify Web Playback SDK token response did not include access_token.', { payload });
       throw new Error('Spotify token response did not include access_token.');
+    }
+    if (spotifyAuthorizationCode) {
+      spotifyAuthorizationCode = '';
+      const urlWithoutCode = new URL(window.location.href);
+      urlWithoutCode.searchParams.delete('code');
+      window.history.replaceState({}, document.title, urlWithoutCode.toString());
     }
     return accessToken;
   };

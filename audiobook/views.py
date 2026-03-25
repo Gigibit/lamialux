@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import time
 import uuid
 from pathlib import Path
 
@@ -547,24 +548,147 @@ def _handle_music_start(
 
 
 @require_GET
-def spotify_web_playback_token(_request: HttpRequest) -> JsonResponse:
-    playback_token = str(os.getenv("SPOTIFY_WEB_PLAYBACK_ACCESS_TOKEN", "")).strip()
-    if not playback_token:
-        logger.error("Spotify Web Playback SDK token endpoint requested without configured token.")
+def spotify_web_playback_token(request: HttpRequest) -> JsonResponse:
+    now_timestamp = int(time.time())
+    session_access_token = str(
+        request.session.get("spotify_web_playback_access_token") or ""
+    ).strip()
+    session_expires_at = int(
+        request.session.get("spotify_web_playback_access_token_expires_at") or 0
+    )
+    if session_access_token and session_expires_at > now_timestamp + 30:
+        return JsonResponse({"access_token": session_access_token})
+
+    authorization_code = str(request.GET.get("code") or "").strip()
+    session_refresh_token = str(
+        request.session.get("spotify_web_playback_refresh_token") or ""
+    ).strip()
+    env_refresh_token = str(os.getenv("SPOTIFY_REFRESH_TOKEN", "")).strip()
+    refresh_token = session_refresh_token or env_refresh_token
+
+    try:
+        if authorization_code:
+            token_payload = _request_spotify_oauth_token(
+                grant_type="authorization_code",
+                payload={
+                    "code": authorization_code,
+                    "redirect_uri": str(os.getenv("SPOTIFY_REDIRECT_URI", "")).strip(),
+                },
+            )
+        elif refresh_token:
+            token_payload = _request_spotify_oauth_token(
+                grant_type="refresh_token",
+                payload={"refresh_token": refresh_token},
+            )
+        else:
+            playback_token = str(os.getenv("SPOTIFY_WEB_PLAYBACK_ACCESS_TOKEN", "")).strip()
+            if not playback_token:
+                logger.error(
+                    "Spotify Web Playback SDK token endpoint requested without configured token."
+                )
+                logger.error(
+                    "Returning non-2xx response for missing Spotify Web Playback SDK token: "
+                    "status=503"
+                )
+                return JsonResponse(
+                    {
+                        "error": (
+                            "Spotify Web Playback token is not configured. "
+                            "Set SPOTIFY_WEB_PLAYBACK_ACCESS_TOKEN or configure "
+                            "SPOTIFY_CLIENT_ID/SPOTIFY_CLIENT_SECRET with SPOTIFY_REDIRECT_URI."
+                        )
+                    },
+                    status=503,
+                )
+            return JsonResponse({"access_token": playback_token})
+    except UpstreamServiceError as exc:
+        logger.error("Spotify OAuth token request failed: %s", exc)
+        logger.error("Returning non-2xx response for Spotify OAuth token failure: status=502")
+        return JsonResponse({"error": str(exc)}, status=502)
+
+    access_token = str(token_payload.get("access_token") or "").strip()
+    refresh_token_from_oauth = str(token_payload.get("refresh_token") or "").strip()
+    expires_in = int(token_payload.get("expires_in") or 3600)
+    if not access_token:
         logger.error(
-            "Returning non-2xx response for missing Spotify Web Playback SDK token: status=503"
+            "Spotify OAuth token response did not include access_token. payload_keys=%s",
+            sorted(token_payload.keys()),
+        )
+        logger.error(
+            "Returning non-2xx response for invalid Spotify OAuth token payload: status=502"
         )
         return JsonResponse(
-            {
-                "error": (
-                    "Spotify Web Playback token is not configured. "
-                    "Set SPOTIFY_WEB_PLAYBACK_ACCESS_TOKEN."
-                )
-            },
-            status=503,
+            {"error": "Spotify token response is missing access_token."},
+            status=502,
         )
 
-    return JsonResponse({"access_token": playback_token})
+    request.session["spotify_web_playback_access_token"] = access_token
+    request.session["spotify_web_playback_access_token_expires_at"] = now_timestamp + max(
+        expires_in - 30, 30
+    )
+    if refresh_token_from_oauth:
+        request.session["spotify_web_playback_refresh_token"] = refresh_token_from_oauth
+    elif refresh_token:
+        request.session["spotify_web_playback_refresh_token"] = refresh_token
+
+    return JsonResponse({"access_token": access_token})
+
+
+def _request_spotify_oauth_token(*, grant_type: str, payload: dict[str, str]) -> dict[str, object]:
+    spotify_client_id = str(os.getenv("SPOTIFY_CLIENT_ID", "")).strip()
+    spotify_client_secret = str(os.getenv("SPOTIFY_CLIENT_SECRET", "")).strip()
+    if not spotify_client_id or not spotify_client_secret:
+        logger.error(
+            "Spotify OAuth token request attempted without full client credentials for "
+            "grant_type=%s",
+            grant_type,
+        )
+        raise UpstreamServiceError(
+            "Spotify OAuth requires SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET."
+        )
+
+    if grant_type == "authorization_code" and not payload.get("redirect_uri"):
+        logger.error("Spotify OAuth authorization_code exchange attempted without redirect URI.")
+        raise UpstreamServiceError(
+            "Spotify OAuth authorization_code requires SPOTIFY_REDIRECT_URI."
+        )
+
+    request_payload = {"grant_type": grant_type, **payload}
+    try:
+        with httpx.Client(timeout=20.0) as client:
+            response = client.post(
+                "https://accounts.spotify.com/api/token",
+                data=request_payload,
+                auth=(spotify_client_id, spotify_client_secret),
+                headers={"Accept": "application/json"},
+            )
+    except httpx.HTTPError as exc:
+        logger.error("Spotify OAuth token request failed due to HTTP transport error: %s", exc)
+        raise UpstreamServiceError("Spotify OAuth token endpoint is unreachable.") from exc
+
+    if response.status_code >= 400:
+        logger.error(
+            "Spotify OAuth token request returned non-2xx status=%s body=%s",
+            response.status_code,
+            response.text[:500],
+        )
+        raise UpstreamServiceError(
+            f"Spotify OAuth token exchange failed with status {response.status_code}."
+        )
+
+    try:
+        token_payload = response.json()
+    except ValueError as exc:
+        logger.error("Spotify OAuth token response was not valid JSON: %s", exc)
+        raise UpstreamServiceError("Spotify OAuth token endpoint returned invalid JSON.") from exc
+
+    if not isinstance(token_payload, dict):
+        logger.error(
+            "Spotify OAuth token response had an unexpected payload type: %s",
+            type(token_payload).__name__,
+        )
+        raise UpstreamServiceError("Spotify OAuth token endpoint returned an unexpected payload.")
+    return token_payload
 
 def _store_stream_session(browser_session_id: str, livepeer_stream_session: StreamSession) -> None:
     initial_output_video_url = (
