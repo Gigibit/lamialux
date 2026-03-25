@@ -80,6 +80,7 @@
       url: response.url,
       location: response.headers.get('location'),
       livepeerPlaybackUrl: response.headers.get('livepeer-playback-url'),
+      body,
       bodyPreview: body.slice(0, 500),
     };
   };
@@ -238,8 +239,20 @@
       logger.error('WHIP publish request returned a non-2xx response.', responseSummary);
       throw new Error(`WHIP connection failed with status ${responseSummary.status}`);
     }
-    const answer = { type: 'answer', sdp: responseSummary.bodyPreview || await response.text() };
-    await publisherPc.setRemoteDescription(answer);
+    if (!responseSummary.body) {
+      logger.error('WHIP publish response was missing the SDP answer body.', responseSummary);
+      throw new Error('WHIP connection failed because the SDP answer was empty.');
+    }
+    const answer = { type: 'answer', sdp: responseSummary.body };
+    try {
+      await publisherPc.setRemoteDescription(answer);
+    } catch (error) {
+      logger.error('Failed to apply WHIP SDP answer as the remote description.', {
+        error,
+        responseSummary,
+      });
+      throw error;
+    }
   };
 
   const connectWhep = async () => {
@@ -270,7 +283,19 @@
       const responseSummary = await summarizeResponse(response);
       if (response.ok) {
         whepResourceUrl = responseSummary.location;
-        await viewerPc.setRemoteDescription({ type: 'answer', sdp: responseSummary.bodyPreview || await response.text() });
+        if (!responseSummary.body) {
+          logger.error('WHEP playback response was missing the SDP answer body.', responseSummary);
+          throw new Error('WHEP connection failed because the SDP answer was empty.');
+        }
+        try {
+          await viewerPc.setRemoteDescription({ type: 'answer', sdp: responseSummary.body });
+        } catch (error) {
+          logger.error('Failed to apply WHEP SDP answer as the remote description.', {
+            error,
+            responseSummary,
+          });
+          throw error;
+        }
         return;
       }
       lastError = new Error(`WHEP connection failed with status ${responseSummary.status}`);
