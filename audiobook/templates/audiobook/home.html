@@ -51,6 +51,14 @@
           </div>
           <p class="small">{% if stream %}{{ stream.author }}{% else %}The visible canvas is always mounted so the animation surface is available before streaming starts.{% endif %}</p>
           <video id="whep-player" controls autoplay playsinline muted></video>
+          <video
+            id="narrative-source-video"
+            preload="metadata"
+            playsinline
+            crossorigin="anonymous"
+            {% if stream and stream.source_video_url %}src="{{ stream.source_video_url }}"{% endif %}
+            {% if not stream or not stream.source_video_url %}hidden{% endif %}
+          ></video>
           <audio id="coqui-player" preload="none" hidden></audio>
           <div class="visualizer-stack">
             <div>
@@ -92,6 +100,9 @@
       </section>
     </main>
     <script src="{% static 'audiobook/caos.js' %}"></script>
+    <script>
+      window.CAOS_REMOTE_FALLBACK = "https://raw.githubusercontent.com/Gigibit/ingoya/refs/heads/theia/public/caos.js";
+    </script>
 
     <script>
       (() => {
@@ -105,6 +116,7 @@
         const video = document.getElementById('whep-player');
         const coquiPlayer = document.getElementById('coqui-player');
         const sessionLabel = document.getElementById('stream-session-label');
+        const narrativeSourceVideo = document.getElementById('narrative-source-video');
         const items = Array.from(document.querySelectorAll('.chunk-list li'));
         const hasPreparedStream = {{ stream|yesno:'true,false' }};
         const PROMPT_UPDATE_INTERVAL_MS = 5000;
@@ -121,7 +133,7 @@
           browserSessionInput.value = browserSessionId;
         }
 
-        if (!playButton || !stopButton || !connectButton || !statusEl || !animationCanvas || !animationOverlay || !video || !sessionLabel || !coquiPlayer) {
+        if (!playButton || !stopButton || !connectButton || !statusEl || !animationCanvas || !animationOverlay || !video || !sessionLabel || !coquiPlayer || !narrativeSourceVideo) {
           return;
         }
 
@@ -148,6 +160,7 @@
         let sourceNode = null;
         let promptUpdateTimerId = null;
         let playbackToken = 0;
+        const initialSourceVideoUrl = '{{ stream.source_video_url|default:""|escapejs }}';
 
         const sentencePool = items
           .flatMap((item) => (item.dataset.text || '').match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [])
@@ -370,12 +383,43 @@
           }
 
           await ensureAudioGraph();
+          const sourceUrl = (initialSourceVideoUrl || '').trim();
+          if (sourceUrl) {
+            try {
+              narrativeSourceVideo.hidden = false;
+              if (!narrativeSourceVideo.src) {
+                narrativeSourceVideo.src = sourceUrl;
+              }
+              await narrativeSourceVideo.play();
+              const videoStream = narrativeSourceVideo.captureStream();
+              const videoTracks = videoStream.getVideoTracks();
+              const audioTracks = videoStream.getAudioTracks();
+              if (!videoTracks.length) {
+                logger.error('Narrative source video stream does not expose a video track.', {
+                  sourceUrl,
+                  sessionId: streamSession.sessionId,
+                });
+                throw new Error('Narrative source video does not provide a video track for WHIP.');
+              }
+              compositeStream = new MediaStream([
+                ...videoTracks,
+                ...audioTracks,
+              ]);
+              drawCanvas('Publishing YouTube source video feed through WHIP.');
+              return compositeStream;
+            } catch (error) {
+              logger.error('Failed to prepare narrative source video for WHIP publishing.', {
+                sourceUrl,
+                sessionId: streamSession.sessionId,
+                error,
+              });
+              throw error;
+            }
+          }
+
           drawCanvas('Theia canvas capture ready for WHIP publishing.');
           const canvasStream = animationCanvas.captureStream(30);
-          compositeStream = new MediaStream([
-            ...canvasStream.getVideoTracks(),
-            ...destination.stream.getAudioTracks(),
-          ]);
+          compositeStream = new MediaStream([...canvasStream.getVideoTracks(), ...destination.stream.getAudioTracks()]);
           return compositeStream;
         };
 
