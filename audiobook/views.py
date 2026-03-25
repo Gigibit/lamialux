@@ -44,6 +44,23 @@ SPOTIFY_WEB_PLAYBACK_SCOPES = (
 )
 
 
+def _spotify_scope_set(scope_value: object) -> set[str]:
+    return {
+        segment.strip()
+        for segment in str(scope_value or "").split(" ")
+        if segment and segment.strip()
+    }
+
+
+def _missing_spotify_web_playback_scopes(scope_value: object) -> list[str]:
+    available_scopes = _spotify_scope_set(scope_value)
+    return [
+        required_scope
+        for required_scope in SPOTIFY_WEB_PLAYBACK_SCOPES
+        if required_scope not in available_scopes
+    ]
+
+
 def _build_book_stream_prompt(book_title: str) -> str:
     normalized_title = str(book_title or "").strip()
     if not normalized_title:
@@ -608,8 +625,20 @@ def spotify_web_playback_token(request: HttpRequest) -> JsonResponse:
     session_expires_at = int(
         request.session.get("spotify_web_playback_access_token_expires_at") or 0
     )
+    session_scope = str(request.session.get("spotify_web_playback_scope") or "").strip()
     if session_access_token and session_expires_at > now_timestamp + 30:
-        return JsonResponse({"access_token": session_access_token})
+        missing_session_scopes = _missing_spotify_web_playback_scopes(session_scope)
+        if missing_session_scopes:
+            logger.error(
+                "Cached Spotify Web Playback token is missing required scopes. "
+                "missing_scopes=%s granted_scope='%s'",
+                missing_session_scopes,
+                session_scope,
+            )
+            request.session.pop("spotify_web_playback_access_token", None)
+            request.session.pop("spotify_web_playback_access_token_expires_at", None)
+        else:
+            return JsonResponse({"access_token": session_access_token})
 
     authorization_code = str(request.GET.get("code") or "").strip()
     authorization_state = str(request.GET.get("state") or "").strip()
@@ -710,6 +739,32 @@ def spotify_web_playback_token(request: HttpRequest) -> JsonResponse:
                     },
                     status=503,
                 )
+            playback_scope = str(
+                os.getenv("SPOTIFY_WEB_PLAYBACK_ACCESS_TOKEN_SCOPES", "")
+            ).strip()
+            missing_env_scopes = _missing_spotify_web_playback_scopes(playback_scope)
+            if missing_env_scopes:
+                logger.error(
+                    "Configured SPOTIFY_WEB_PLAYBACK_ACCESS_TOKEN is missing required scopes. "
+                    "missing_scopes=%s configured_scope='%s'",
+                    missing_env_scopes,
+                    playback_scope,
+                )
+                logger.error(
+                    "Returning non-2xx response for invalid Spotify Web Playback token scopes: "
+                    "status=503"
+                )
+                return JsonResponse(
+                    {
+                        "error": (
+                            "Spotify Web Playback access token is missing required scopes. "
+                            "Update SPOTIFY_WEB_PLAYBACK_ACCESS_TOKEN_SCOPES and re-authorize."
+                        ),
+                        "missing_scopes": missing_env_scopes,
+                        "required_scopes": list(SPOTIFY_WEB_PLAYBACK_SCOPES),
+                    },
+                    status=503,
+                )
             return JsonResponse({"access_token": playback_token})
     except UpstreamServiceError as exc:
         logger.error("Spotify OAuth token request failed: %s", exc)
@@ -732,6 +787,45 @@ def spotify_web_playback_token(request: HttpRequest) -> JsonResponse:
             status=502,
         )
 
+    granted_scope = str(token_payload.get("scope") or session_scope).strip()
+    missing_scopes = _missing_spotify_web_playback_scopes(granted_scope)
+    if missing_scopes:
+        logger.error(
+            "Spotify OAuth token did not include required Web Playback scopes. "
+            "missing_scopes=%s granted_scope='%s'",
+            missing_scopes,
+            granted_scope,
+        )
+        has_client_id = bool(str(os.getenv("SPOTIFY_CLIENT_ID", "")).strip())
+        has_redirect_uri = bool(str(os.getenv("SPOTIFY_REDIRECT_URI", "")).strip())
+        if has_client_id and has_redirect_uri:
+            authorization_url = _build_spotify_authorization_url(request)
+            logger.error(
+                "Returning non-2xx response for Spotify OAuth re-authorization due to "
+                "missing scopes: status=401"
+            )
+            return JsonResponse(
+                {
+                    "error": "Spotify authorization is required with Web Playback scopes.",
+                    "missing_scopes": missing_scopes,
+                    "required_scopes": list(SPOTIFY_WEB_PLAYBACK_SCOPES),
+                    "authorization_url": authorization_url,
+                },
+                status=401,
+            )
+        logger.error(
+            "Returning non-2xx response for Spotify OAuth missing scopes without "
+            "re-auth configuration: status=502"
+        )
+        return JsonResponse(
+            {
+                "error": "Spotify token is missing required Web Playback scopes.",
+                "missing_scopes": missing_scopes,
+                "required_scopes": list(SPOTIFY_WEB_PLAYBACK_SCOPES),
+            },
+            status=502,
+        )
+
     request.session["spotify_web_playback_access_token"] = access_token
     request.session["spotify_web_playback_access_token_expires_at"] = now_timestamp + max(
         expires_in - 30, 30
@@ -740,6 +834,8 @@ def spotify_web_playback_token(request: HttpRequest) -> JsonResponse:
         request.session["spotify_web_playback_refresh_token"] = refresh_token_from_oauth
     elif refresh_token:
         request.session["spotify_web_playback_refresh_token"] = refresh_token
+    if granted_scope:
+        request.session["spotify_web_playback_scope"] = granted_scope
     request.session.pop("spotify_oauth_state", None)
     request.session.pop("spotify_oauth_code_verifier", None)
 
