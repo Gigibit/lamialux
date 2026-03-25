@@ -15,7 +15,6 @@
   const items = Array.from(document.querySelectorAll('.chunk-list li'));
   const musicTrack = config.musicTrack || null;
   const narrativeModeProvider = String(config.narrativeModeProvider || '').trim().toUpperCase();
-  const narrativeSourceVideo = document.getElementById('narrative-source-video');
   const sourceVideoUrl = String(config.sourceVideoUrl || '').trim();
   const isSourceNarrationProvider = narrativeModeProvider === 'YOUTUBE_SEARCH';
   const PROMPT_UPDATE_INTERVAL_MS = 5000;
@@ -115,23 +114,6 @@
       `a=${candidate.candidate}`,
       '',
     ].join('\r\n');
-  };
-  const isLikelyDirectMediaUrl = (url) => /\.(mp4|m4v|mov|webm|m3u8|mp3|m4a|ogg|wav)(\?|#|$)/i.test(url);
-  const isUnsupportedNarrativeSourceUrl = (url) => {
-    if (!url) {
-      return false;
-    }
-    try {
-      const parsed = new URL(url);
-      const host = parsed.hostname.toLowerCase();
-      if (host.includes('youtube.com') || host.includes('youtu.be')) {
-        return true;
-      }
-    } catch (error) {
-      logger.error('Narrative source URL parsing failed.', { error, sourceVideoUrl: url });
-      return true;
-    }
-    return !isLikelyDirectMediaUrl(url);
   };
   const extractYouTubeVideoId = (url) => {
     if (!url) {
@@ -370,17 +352,17 @@
       logger.error('Theia form lip animation failed because one or more SVG mouth paths are missing.');
       return;
     }
-    const oscillation = (Math.sin(timestampMs / 145) + 1) / 2;
+    const oscillation = (Math.sin(timestampMs / 130) + 1) / 2;
     const audioIntensity = getLipAudioIntensity();
-    const blend = Math.min(1, (oscillation * 0.7) + (audioIntensity * 1.25));
-    const width = 16 + (blend * 13.5);
-    const upperLift = 188 + (blend * 2.3);
-    const lowerDrop = 192 + (blend * 13.8);
+    const blend = Math.min(1, (oscillation * 0.55) + (audioIntensity * 1.55));
+    const width = 16 + (blend * 17.5);
+    const upperLift = 189 + (blend * 3.2);
+    const lowerDrop = 193 + (blend * 23.5);
     const cornerLeft = 150 - width;
     const cornerRight = 150 + width;
-    mouthUpper.setAttribute('d', `M${cornerLeft} 190 Q150 ${upperLift} ${cornerRight} 190 Q150 ${192 + (blend * 2.8)} ${cornerLeft} 190 Z`);
-    mouthLower.setAttribute('d', `M${cornerLeft} 190 Q150 ${lowerDrop} ${cornerRight} 190 Q150 ${192 + (blend * 6.6)} ${cornerLeft} 190 Z`);
-    mouthInside.setAttribute('d', `M${cornerLeft + 1} 190 Q150 ${189 + (blend * 12.8)} ${cornerRight - 1} 190 Q150 ${191 + (blend * 8.4)} ${cornerLeft + 1} 190 Z`);
+    mouthUpper.setAttribute('d', `M${cornerLeft} 190 Q150 ${upperLift} ${cornerRight} 190 Q150 ${193 + (blend * 4.3)} ${cornerLeft} 190 Z`);
+    mouthLower.setAttribute('d', `M${cornerLeft} 190 Q150 ${lowerDrop} ${cornerRight} 190 Q150 ${193 + (blend * 13.2)} ${cornerLeft} 190 Z`);
+    mouthInside.setAttribute('d', `M${cornerLeft + 1} 190 Q150 ${189 + (blend * 20.5)} ${cornerRight - 1} 190 Q150 ${192 + (blend * 13.6)} ${cornerLeft + 1} 190 Z`);
   };
 
   const startTheiaSvgAnimator = () => {
@@ -626,27 +608,11 @@
       setOverlay('LamiaLux source narration', 'YouTube source will play through an embedded player on Play.');
       return;
     }
-    if (!narrativeSourceVideo) {
-      logger.error('Source narration provider requires the narrative source video element, but it is missing.', {
-        narrativeModeProvider,
-        sourceVideoUrl,
-      });
-      setStatus('Narrative source video element is missing.');
-      return;
-    }
-    if (isUnsupportedNarrativeSourceUrl(sourceVideoUrl)) {
-      logger.log('Narrative source URL is not a direct media file; browser playback will fall back to Coqui TTS.', {
-        narrativeModeProvider,
-        sourceVideoUrl,
-      });
-      setStatus('Source narration URL is not a direct media file. Use a direct MP4/WebM URL.');
-      setOverlay(
-        'LamiaLux source narration',
-        'The selected source is a web page URL (for example YouTube watch) and cannot be played as <video>.',
-      );
-      return;
-    }
-    narrativeSourceVideo.src = sourceVideoUrl;
+    logger.error('Source narration provider URL is not a supported YouTube URL; falling back to Coqui TTS.', {
+      narrativeModeProvider,
+      sourceVideoUrl,
+    });
+    setStatus('Source narration URL is unsupported. Falling back to Coqui TTS playback.');
   };
 
   const refreshStreamSessionAfterWhip = async () => {
@@ -880,6 +846,7 @@
         setOverlay('LamiaLux source narration', 'Embedded YouTube source playback started.');
         try {
           await playYouTubeSourceNarration(sourceVideoUrl);
+          return;
         } catch (error) {
           logger.error('YouTube source narration playback failed to start from the embedded player.', {
             error,
@@ -889,37 +856,11 @@
           setStatus('YouTube source narration playback failed; falling back to Coqui TTS playback.');
         }
       }
-      if (!narrativeSourceVideo) {
-        logger.error('Source narration provider requires the narrative source video element, but it is missing.', {
-          narrativeModeProvider,
-          sourceVideoUrl,
-        });
-        setStatus('Narrative source video element is missing for this provider.');
-        return;
-      }
-      if (isUnsupportedNarrativeSourceUrl(sourceVideoUrl)) {
-        logger.log('Source narration URL is not a direct media resource; falling back to Coqui TTS playback.', {
-          narrativeModeProvider,
-          sourceVideoUrl,
-        });
-        setStatus('Source narration URL is unsupported. Falling back to Coqui TTS playback.');
-      } else {
-        setStatus('Playing source narration video...');
-        setOverlay('LamiaLux source narration', 'Playback is using the upstream source video audio.');
-        try {
-          connectLipAudioInput(narrativeSourceVideo);
-          await narrativeSourceVideo.play();
-        } catch (error) {
-          logger.error('Source narration video playback failed to start.', {
-            error,
-            narrativeModeProvider,
-            sourceVideoUrl: narrativeSourceVideo.src,
-          });
-          setStatus('Source narration playback failed to start.');
-          throw error;
-        }
-        return;
-      }
+      logger.error('Source narration provider URL is not a supported YouTube URL; falling back to Coqui TTS.', {
+        narrativeModeProvider,
+        sourceVideoUrl,
+      });
+      setStatus('Source narration URL is unsupported. Falling back to Coqui TTS playback.');
     }
 
     for (let index = currentIndex; index < items.length; index += 1) {
@@ -994,7 +935,6 @@
     highlightChunk(-1);
     await stopMediaElement(coquiPlayer);
     await stopMediaElement(musicPlayer);
-    await stopMediaElement(narrativeSourceVideo);
     stopYouTubeSourceNarration();
     detachLipAudioInput();
     stopCompositeFrameLoop();

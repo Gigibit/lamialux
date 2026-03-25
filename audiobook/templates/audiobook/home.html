@@ -83,7 +83,6 @@
         </div>
       </section>
 
-      {% if message %}<p class="message">{{ message }}</p>{% endif %}
       {% if error %}<p class="error">{{ error }}</p>{% endif %}
 
       <section class="stream-layout">
@@ -97,13 +96,6 @@
           </div>
           <p class="small">{% if stream %}{{ stream.author }}{% else %}The visible canvas is always mounted so the animation surface is available before streaming starts.{% endif %}</p>
           <video id="whep-player" autoplay playsinline muted></video>
-          <video
-            id="narrative-source-video"
-            preload="metadata"
-            playsinline
-            crossorigin="anonymous"
-            {% if not stream or not stream.source_video_url %}hidden{% endif %}
-          ></video>
           <audio id="coqui-player" preload="none" hidden></audio>
           <audio id="music-player" preload="none" {% if page != 'music' %}hidden{% endif %}></audio>
           <div class="visualizer-stack">
