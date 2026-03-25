@@ -297,10 +297,59 @@
     return accessToken;
   };
 
+  const waitForSpotifySdkReady = async () => {
+    if (window.Spotify && typeof window.Spotify.Player === 'function') {
+      return;
+    }
+    await new Promise((resolve, reject) => {
+      let settled = false;
+      const resolveOnce = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        resolve();
+      };
+      const rejectOnce = (error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        reject(error);
+      };
+      if (window.lamialuxSpotifySdkReady) {
+        if (window.Spotify && typeof window.Spotify.Player === 'function') {
+          resolveOnce();
+          return;
+        }
+        logger.error('Spotify SDK ready flag is set but window.Spotify.Player is unavailable.');
+        rejectOnce(new Error('Spotify Web Playback SDK is unavailable after ready callback.'));
+        return;
+      }
+      const callbacks = Array.isArray(window.lamialuxSpotifySdkReadyCallbacks)
+        ? window.lamialuxSpotifySdkReadyCallbacks
+        : [];
+      window.lamialuxSpotifySdkReadyCallbacks = callbacks;
+      callbacks.push(() => {
+        if (window.Spotify && typeof window.Spotify.Player === 'function') {
+          resolveOnce();
+          return;
+        }
+        logger.error('Spotify SDK ready callback executed but window.Spotify.Player is unavailable.');
+        rejectOnce(new Error('Spotify Web Playback SDK is unavailable after ready callback.'));
+      });
+      window.setTimeout(() => {
+        logger.error('Timed out while waiting for Spotify Web Playback SDK readiness callback.');
+        rejectOnce(new Error('Timed out while waiting for Spotify Web Playback SDK.'));
+      }, 10000);
+    });
+  };
+
   const ensureSpotifyPlayer = async () => {
     if (spotifyPlayer && spotifyDeviceId) {
       return { player: spotifyPlayer, deviceId: spotifyDeviceId };
     }
+    await waitForSpotifySdkReady();
     if (!window.Spotify || typeof window.Spotify.Player !== 'function') {
       logger.error('Spotify Web Playback SDK is unavailable on window.Spotify.', { hasSpotify: !!window.Spotify });
       throw new Error('Spotify Web Playback SDK is unavailable.');
