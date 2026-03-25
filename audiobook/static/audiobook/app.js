@@ -475,6 +475,14 @@
       theiaSvgRefreshTimerId = window.setInterval(refreshTheiaSvgTexture, 120);
       startCompositeFrameLoop();
     }
+    if (!compositeFrameTimerId) {
+      logger.error('Composite frame loop was not running while preparing the stream; restarting the canvas compositor.');
+      startCompositeFrameLoop();
+    }
+    if (!theiaSvgRefreshTimerId) {
+      logger.error('Theia SVG refresh loop was not running while preparing the stream; restarting the texture refresh timer.');
+      theiaSvgRefreshTimerId = window.setInterval(refreshTheiaSvgTexture, 120);
+    }
     const canvasStream = compositeCanvas.captureStream(30);
     compositeStream = new MediaStream([...canvasStream.getVideoTracks()]);
     return compositeStream;
