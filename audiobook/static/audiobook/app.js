@@ -14,6 +14,9 @@
   const sessionLabel = document.getElementById('stream-session-label');
   const items = Array.from(document.querySelectorAll('.chunk-list li'));
   const musicTrack = config.musicTrack || null;
+  const narrativeModeProvider = String(config.narrativeModeProvider || '').trim().toUpperCase();
+  const narrativeSourceVideo = document.getElementById('narrative-source-video');
+  const usesSourceNarration = narrativeModeProvider === 'YOUTUBE_SEARCH';
   const PROMPT_UPDATE_INTERVAL_MS = 5000;
   const logger = window.logger && typeof window.logger.error === 'function' ? window.logger : console;
 
@@ -182,6 +185,8 @@
     let audioStream = null;
     if (page === 'music' && musicPlayer) {
       audioStream = bindAudioElementToGraph(musicPlayer);
+    } else if (page === 'book' && usesSourceNarration && narrativeSourceVideo) {
+      audioStream = bindAudioElementToGraph(narrativeSourceVideo);
     } else if (page === 'book' && coquiPlayer) {
       audioStream = bindAudioElementToGraph(coquiPlayer);
     }
@@ -349,6 +354,31 @@
     await ensureStreamingReady();
     startPromptUpdates();
 
+    if (usesSourceNarration) {
+      if (!narrativeSourceVideo || !narrativeSourceVideo.src) {
+        logger.error('Source narration provider is enabled but no narrative source video is available.', {
+          narrativeModeProvider,
+          hasNarrativeSourceVideoElement: Boolean(narrativeSourceVideo),
+        });
+        setStatus('Narrative source video is missing for this provider.');
+        return;
+      }
+      setStatus('Playing source narration video...');
+      setOverlay('LamiaLux source narration', 'Playback is using the upstream source video audio.');
+      try {
+        await narrativeSourceVideo.play();
+      } catch (error) {
+        logger.error('Source narration video playback failed to start.', {
+          error,
+          narrativeModeProvider,
+          sourceVideoUrl: narrativeSourceVideo.src,
+        });
+        setStatus('Source narration playback failed to start.');
+        throw error;
+      }
+      return;
+    }
+
     for (let index = currentIndex; index < items.length; index += 1) {
       if (cancelled || localToken !== playbackToken) {
         break;
@@ -418,6 +448,7 @@
     highlightChunk(-1);
     await stopMediaElement(coquiPlayer);
     await stopMediaElement(musicPlayer);
+    await stopMediaElement(narrativeSourceVideo);
     setStatus('Stopped.');
     setOverlay('LamiaLux ready', page === 'music' ? 'Search a track to start visual music playback.' : 'Search a PDF to start narration playback.');
   };

@@ -101,8 +101,8 @@
             preload="metadata"
             playsinline
             crossorigin="anonymous"
-            {% if stream and stream.source_video_url and narrative_mode_provider != 'YOUTUBE_SEARCH' %}src="{{ stream.source_video_url }}"{% endif %}
-            {% if not stream or not stream.source_video_url or narrative_mode_provider == 'YOUTUBE_SEARCH' %}hidden{% endif %}
+            {% if stream and stream.source_video_url %}src="{{ stream.source_video_url }}"{% endif %}
+            {% if not stream or not stream.source_video_url %}hidden{% endif %}
           ></video>
           <audio id="coqui-player" preload="none" hidden></audio>
           <audio id="music-player" preload="none" {% if page != 'music' %}hidden{% endif %}></audio>
@@ -186,6 +186,7 @@
       window.lamialuxPageConfig = {
         page: "{{ page }}",
         hasPreparedStream: {{ stream|yesno:'true,false' }},
+        narrativeModeProvider: "{{ narrative_mode_provider|default:'' }}",
         musicTrack: JSON.parse(document.getElementById('music-track-data').textContent),
       };
     </script>
