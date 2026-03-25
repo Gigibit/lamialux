@@ -22,7 +22,7 @@
   const STORY_PROMPT_DELTA_SECONDS = Number(config.updateStoryPromptDeltaSeconds || 10);
   const logger = window.logger && typeof window.logger.error === 'function' ? window.logger : console;
 
-  if (!playButton || !stopButton || !statusEl || !animationCanvas || !video || !sessionLabel) {
+  if (!stopButton || !statusEl || !animationCanvas || !video || !sessionLabel) {
     return;
   }
 
@@ -483,24 +483,24 @@
     }
     if ((timestampMs - lastLipRandomUpdateMs) > 75) {
       lastLipRandomUpdateMs = timestampMs;
-      lipRandomVerticalBoost = (Math.random() * 0.28) - 0.04;
-      lipRandomWidthOffset = (Math.random() * 0.16) - 0.08;
-      lipRandomInsideOffset = (Math.random() * 0.24) - 0.08;
+      lipRandomVerticalBoost = (Math.random() * 0.48) - 0.06;
+      lipRandomWidthOffset = (Math.random() * 0.2) - 0.1;
+      lipRandomInsideOffset = (Math.random() * 0.36) - 0.1;
     }
     const oscillation = (Math.sin(timestampMs / 88) + 1) / 2;
     const audioIntensity = getLipAudioIntensity();
-    const speechPulse = Math.min(1, (audioIntensity * 2.05) + (oscillation * 0.62));
-    const jawDrop = Math.pow(speechPulse, 0.72);
+    const speechPulse = Math.min(1.12, (audioIntensity * 2.55) + (oscillation * 0.82));
+    const jawDrop = Math.pow(Math.min(1, speechPulse), 0.58);
     const lipTension = 1 - (jawDrop * 0.7);
     const width = 17 + (lipTension * 7.5) + (lipRandomWidthOffset * 6);
     const verticalExpansion = Math.max(0, jawDrop + lipRandomVerticalBoost);
-    const upperLift = 187 + (verticalExpansion * 8.8);
-    const lowerDrop = 195 + (verticalExpansion * 67);
+    const upperLift = 186 + (verticalExpansion * 13.5);
+    const lowerDrop = 194 + (verticalExpansion * 92);
     const cornerLeft = 150 - width;
     const cornerRight = 150 + width;
-    mouthUpper.setAttribute('d', `M${cornerLeft} 190 Q150 ${upperLift} ${cornerRight} 190 Q150 ${193 + (verticalExpansion * 4.2)} ${cornerLeft} 190 Z`);
-    mouthLower.setAttribute('d', `M${cornerLeft} 190 Q150 ${lowerDrop} ${cornerRight} 190 Q150 ${194 + (verticalExpansion * 31.6)} ${cornerLeft} 190 Z`);
-    mouthInside.setAttribute('d', `M${cornerLeft + 1} 190 Q150 ${191 + (verticalExpansion * 52) + (lipRandomInsideOffset * 4)} ${cornerRight - 1} 190 Q150 ${194 + (verticalExpansion * 33.8)} ${cornerLeft + 1} 190 Z`);
+    mouthUpper.setAttribute('d', `M${cornerLeft} 190 Q150 ${upperLift} ${cornerRight} 190 Q150 ${193 + (verticalExpansion * 8.6)} ${cornerLeft} 190 Z`);
+    mouthLower.setAttribute('d', `M${cornerLeft} 190 Q150 ${lowerDrop} ${cornerRight} 190 Q150 ${194 + (verticalExpansion * 45.5)} ${cornerLeft} 190 Z`);
+    mouthInside.setAttribute('d', `M${cornerLeft + 1} 190 Q150 ${191 + (verticalExpansion * 76) + (lipRandomInsideOffset * 6)} ${cornerRight - 1} 190 Q150 ${194 + (verticalExpansion * 48)} ${cornerLeft + 1} 190 Z`);
   };
 
   const startTheiaSvgAnimator = () => {
@@ -1117,6 +1117,17 @@
     }
   };
 
+
+  const maybeAutoReadBook = () => {
+    if (page !== 'book' || !config.hasPreparedStream) {
+      return;
+    }
+    void playBook().catch((error) => {
+      logger.error('Automatic book reading failed right after stream preparation.', { error });
+      setStatus('Automatic reading failed. Press Stop and submit again.');
+    });
+  };
+
   document.querySelectorAll('[data-nav-target]').forEach((link) => {
     link.addEventListener('click', (event) => {
       const href = link.getAttribute('href');
@@ -1132,22 +1143,25 @@
     });
   });
 
-  playButton.addEventListener('click', async () => {
-    try {
-      if (page === 'music') {
-        await playMusic();
-      } else {
-        await playBook();
+  if (playButton) {
+    playButton.addEventListener('click', async () => {
+      try {
+        if (page === 'music') {
+          await playMusic();
+        } else {
+          await playBook();
+        }
+      } catch (error) {
+        logger.error('Playback action failed.', error);
       }
-    } catch (error) {
-      logger.error('Playback action failed.', error);
-    }
-  });
+    });
+  }
   stopButton.addEventListener('click', () => { void stopEverything(); });
   if (fullscreenButton) {
     fullscreenButton.addEventListener('click', () => { void enterFullscreen(); });
   }
 
   prepareNarrativeSourceVideo();
-  setOverlay('LamiaLux ready', page === 'music' ? 'Search a track to prepare the visual music canvas.' : 'Search a PDF to prepare the book canvas.');
+  setOverlay('LamiaLux ready', page === 'music' ? 'Search a track to prepare the visual music canvas.' : 'Search, download, and read to start the book canvas.');
+  maybeAutoReadBook();
 })();
