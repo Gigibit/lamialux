@@ -11,15 +11,6 @@ class BookRequestForm(forms.Form):
             }
         ),
     )
-    daydream_prompt = forms.CharField(
-        max_length=500,
-        label="Prompt",
-        widget=forms.TextInput(
-            attrs={
-                "placeholder": "moody cinematic dreamscape with dramatic light",
-            }
-        ),
-    )
 
 
 class MusicRequestForm(forms.Form):

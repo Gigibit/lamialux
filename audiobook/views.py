@@ -26,6 +26,18 @@ from .services import (
 logger = logging.getLogger("audiobook")
 STREAM_SESSIONS: dict[str, StreamSession] = {}
 WHEP_PROXY_TIMEOUT = httpx.Timeout(connect=5.0, read=5.0, write=30.0, pool=5.0)
+BOOK_STREAM_PROMPT_TEMPLATE = (
+    "Mouth. Real Representation. {book_title}. REAL, NOT drawn, NOT blurry, "
+    "NOT low quality, NOT flat, NOT 2d"
+)
+
+
+def _build_book_stream_prompt(book_title: str) -> str:
+    normalized_title = str(book_title or "").strip()
+    if not normalized_title:
+        logger.error("Book stream prompt requested without a valid title.")
+        raise UpstreamServiceError("Unable to create a stream prompt without a book title.")
+    return BOOK_STREAM_PROMPT_TEMPLATE.format(book_title=normalized_title)
 
 
 def _request_debug_context(request: HttpRequest) -> dict[str, object]:
@@ -433,16 +445,21 @@ def _handle_book_start(
 
     if not form.is_valid():
         logger.error("Invalid book start form submission: %s", form.errors)
-        context["error"] = "Please provide both a book query and a prompt."
+        context["error"] = "Please provide a book query."
         return context, 400
 
     query = form.cleaned_data["book_query"].strip()
-    prompt = form.cleaned_data["daydream_prompt"].strip()
     browser_session_id = _normalize_browser_session_id(request)
 
     try:
         experience = NarrativeClientFactory.create().build_experience(query)
+        prompt = _build_book_stream_prompt(experience.title)
         livepeer_stream_session = DaydreamClient().create_livepeer_stream_session(prompt)
+        PromptStreamUpdater().update_prompt(
+            upstream_stream_id=livepeer_stream_session.upstream_stream_id
+            or livepeer_stream_session.session_id,
+            prompt=prompt,
+        )
     except UpstreamServiceError as exc:
         logger.error("Failed to start book stream for query '%s': %s", query, exc)
         context["error"] = str(exc)
