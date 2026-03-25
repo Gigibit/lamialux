@@ -96,6 +96,18 @@
           </div>
           <p class="small">{% if stream %}{{ stream.author }}{% else %}The visible canvas is always mounted so the animation surface is available before streaming starts.{% endif %}</p>
           <video id="whep-player" autoplay playsinline muted></video>
+            <p class="small" id="stream-session-label">{% if stream %}Session not matched yet.{% else %}Search a narrative source to bind this canvas to a stream session.{% endif %}</p>
+          </div>
+          <p class="small">{% if stream %}{{ stream.author }}{% else %}The visible canvas is always mounted so the animation surface is available before streaming starts.{% endif %}</p>
+          <video id="whep-player" controls autoplay playsinline muted></video>
+          <video
+            id="narrative-source-video"
+            preload="metadata"
+            playsinline
+            crossorigin="anonymous"
+            {% if stream and stream.source_video_url %}src="{{ stream.source_video_url }}"{% endif %}
+            {% if not stream or not stream.source_video_url %}hidden{% endif %}
+          ></video>
           <audio id="coqui-player" preload="none" hidden></audio>
           <audio id="music-player" preload="none" {% if page != 'music' %}hidden{% endif %}></audio>
           <div class="visualizer-stack">
@@ -169,6 +181,10 @@
         </aside>
       </section>
     </main>
+    <script src="{% static 'audiobook/caos.js' %}"></script>
+    <script>
+      window.CAOS_REMOTE_FALLBACK = "https://raw.githubusercontent.com/Gigibit/ingoya/refs/heads/theia/public/caos.js";
+    </script>
 
     <script src="{% static 'audiobook/caos.js' %}"></script>
     {{ music_track|json_script:"music-track-data" }}
@@ -178,6 +194,621 @@
         hasPreparedStream: {{ stream|yesno:'true,false' }},
         musicTrack: JSON.parse(document.getElementById('music-track-data').textContent),
       };
+      (() => {
+        const browserSessionInput = document.getElementById('browser-session-id');
+        const playButton = document.getElementById('play-tts');
+        const stopButton = document.getElementById('stop-tts');
+        const connectButton = document.getElementById('connect-stream');
+        const statusEl = document.getElementById('stream-status');
+        const animationCanvas = document.getElementById('theia-canvas');
+        const animationOverlay = document.getElementById('theia-canvas-overlay');
+        const video = document.getElementById('whep-player');
+        const coquiPlayer = document.getElementById('coqui-player');
+        const sessionLabel = document.getElementById('stream-session-label');
+        const narrativeSourceVideo = document.getElementById('narrative-source-video');
+        const items = Array.from(document.querySelectorAll('.chunk-list li'));
+        const hasPreparedStream = {{ stream|yesno:'true,false' }};
+        const PROMPT_UPDATE_INTERVAL_MS = 5000;
+
+        const createBrowserSessionId = () => ((window.crypto && typeof window.crypto.randomUUID === 'function')
+          ? window.crypto.randomUUID()
+          : `session-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+        const storedBrowserSessionId = window.localStorage.getItem('lamialux.browserSessionId');
+        const browserSessionId = storedBrowserSessionId || createBrowserSessionId();
+        if (!storedBrowserSessionId) {
+          window.localStorage.setItem('lamialux.browserSessionId', browserSessionId);
+        }
+        if (browserSessionInput) {
+          browserSessionInput.value = browserSessionId;
+        }
+
+        if (!playButton || !stopButton || !connectButton || !statusEl || !animationCanvas || !animationOverlay || !video || !sessionLabel || !coquiPlayer || !narrativeSourceVideo) {
+          return;
+        }
+
+        const logger = window.logger && typeof window.logger.error === 'function' ? window.logger : console;
+
+        const streamSession = {
+          sessionId: browserSessionId,
+          whipUrl: '',
+          whepUrl: '',
+          outputVideoUrl: '',
+        };
+        const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+        let publisherPc = null;
+        let viewerPc = null;
+        let whepResourceUrl = null;
+        let currentIndex = 0;
+        let cancelled = false;
+        let compositeStream = null;
+        let connectPromise = null;
+        let streamReady = false;
+        let audioContext = null;
+        let destination = null;
+        let gainNode = null;
+        let sourceNode = null;
+        let promptUpdateTimerId = null;
+        let playbackToken = 0;
+        const initialSourceVideoUrl = '{{ stream.source_video_url|default:""|escapejs }}';
+
+        const sentencePool = items
+          .flatMap((item) => (item.dataset.text || '').match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [])
+          .map((sentence) => sentence.trim())
+          .filter((sentence) => sentence.length > 20);
+
+        const setStatus = (message) => {
+          statusEl.textContent = message;
+        };
+
+        const drawCanvas = (text) => {
+          if (!animationOverlay) {
+            logger.error('Unable to update the Theia canvas overlay because the overlay element is missing.');
+            return;
+          }
+          animationOverlay.innerHTML = '';
+          const title = document.createElement('strong');
+          title.textContent = 'LamiaLux live narrative reading';
+          const body = document.createElement('span');
+          body.textContent = text;
+          animationOverlay.append(title, body);
+        };
+
+        const validateStreamSession = () => {
+          if (!streamSession.sessionId || !streamSession.whipUrl) {
+            const error = new Error('Missing Livepeer session metadata required for WHIP publishing.');
+            logger.error('Livepeer session metadata is incomplete:', {
+              browserSessionId,
+              normalizedStreamSession: streamSession,
+            });
+            throw error;
+          }
+        };
+
+        const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+        const summarizeResponse = async (response) => {
+          const body = await response.text();
+          return {
+            status: response.status,
+            statusText: response.statusText,
+            url: response.url,
+            location: response.headers.get('location'),
+            livepeerPlaybackUrl: response.headers.get('livepeer-playback-url'),
+            bodyPreview: body.slice(0, 500),
+          };
+        };
+
+        const chooseRandomPromptSentence = () => {
+          if (!sentencePool.length) {
+            return '';
+          }
+          const randomIndex = Math.floor(Math.random() * sentencePool.length);
+          return sentencePool[randomIndex];
+        };
+
+        const stopPromptUpdates = () => {
+          if (promptUpdateTimerId) {
+            window.clearInterval(promptUpdateTimerId);
+            promptUpdateTimerId = null;
+          }
+        };
+
+        const pushPromptUpdate = async (prompt) => {
+          if (!prompt || !streamSession.sessionId) {
+            return;
+          }
+
+          try {
+            const response = await fetch(`/streams/${encodeURIComponent(streamSession.sessionId)}/prompt`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ prompt }),
+            });
+            if (!response.ok) {
+              const body = await response.text();
+              logger.error('Prompt stream update failed.', {
+                sessionId: streamSession.sessionId,
+                status: response.status,
+                prompt,
+                body,
+              });
+            }
+          } catch (error) {
+            logger.error('Prompt stream update raised an unexpected error.', {
+              sessionId: streamSession.sessionId,
+              prompt,
+              error,
+            });
+          }
+        };
+
+        const startPromptUpdates = () => {
+          stopPromptUpdates();
+          if (!sentencePool.length) {
+            logger.error('Prompt stream updates were requested without any readable sentences.', { sessionId: streamSession.sessionId });
+            return;
+          }
+
+          promptUpdateTimerId = window.setInterval(() => {
+            const prompt = chooseRandomPromptSentence();
+            if (prompt) {
+              pushPromptUpdate(prompt);
+            }
+          }, PROMPT_UPDATE_INTERVAL_MS);
+        };
+
+        const logPeerConnectionState = (label, peerConnection, extra = {}) => {
+          console.info(`${label} peer connection state changed.`, {
+            connectionState: peerConnection.connectionState,
+            iceConnectionState: peerConnection.iceConnectionState,
+            iceGatheringState: peerConnection.iceGatheringState,
+            signalingState: peerConnection.signalingState,
+            ...extra,
+          });
+        };
+
+        const handleViewerIceCandidate = async ({ candidate }) => {
+          if (!candidate || !whepResourceUrl) {
+            return;
+          }
+
+          const sdpFragment = `a=${candidate.candidate}\n`;
+          try {
+            await fetch(whepResourceUrl, {
+              method: 'PATCH',
+              headers: {
+                'Content-Type': 'application/trickle-ice-sdpfrag',
+              },
+              body: sdpFragment,
+            });
+          } catch (error) {
+            console.warn('Unable to PATCH WHEP ICE candidate to the proxy resource.', {
+              error,
+              sessionId: streamSession.sessionId,
+              whepResourceUrl,
+              candidate,
+            });
+          }
+        };
+
+        const ensureStreamMatch = async () => {
+          if (streamSession.whipUrl && streamSession.whepUrl) {
+            return streamSession;
+          }
+
+          const response = await fetch('/streams/match', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sessionId: streamSession.sessionId }),
+          });
+
+          if (!response.ok) {
+            const body = await response.text();
+            logger.error('Stream match request failed.', {
+              sessionId: streamSession.sessionId,
+              status: response.status,
+              body,
+            });
+            throw new Error('Unable to match an existing Livepeer stream session.');
+          }
+
+          const matchedStreamSession = await response.json();
+          streamSession.sessionId = matchedStreamSession.sessionId || streamSession.sessionId;
+          streamSession.whipUrl = matchedStreamSession.whipUrl || matchedStreamSession.whip_url || '';
+          streamSession.whepUrl = matchedStreamSession.whepUrl || matchedStreamSession.whep_url || '';
+          streamSession.outputVideoUrl = matchedStreamSession.outputVideoUrl || matchedStreamSession.output_video_url || '';
+          sessionLabel.textContent = `Session ${streamSession.sessionId}`;
+          connectButton.disabled = false;
+          playButton.disabled = false;
+          return streamSession;
+        };
+
+        const closePeerConnection = (peerConnection) => {
+          if (!peerConnection) {
+            return;
+          }
+          peerConnection.close();
+        };
+
+        const waitForIceGatheringComplete = (peerConnection) => new Promise((resolve) => {
+          if (peerConnection.iceGatheringState === 'complete') {
+            resolve();
+            return;
+          }
+
+          const onStateChange = () => {
+            if (peerConnection.iceGatheringState === 'complete') {
+              peerConnection.removeEventListener('icegatheringstatechange', onStateChange);
+              resolve();
+            }
+          };
+
+          peerConnection.addEventListener('icegatheringstatechange', onStateChange);
+        });
+
+        const ensureAudioGraph = async () => {
+          if (audioContext) {
+            if (audioContext.state === 'suspended') {
+              await audioContext.resume();
+            }
+            return;
+          }
+
+          audioContext = new AudioContext();
+          destination = audioContext.createMediaStreamDestination();
+          gainNode = audioContext.createGain();
+          gainNode.gain.value = 1;
+          sourceNode = audioContext.createMediaElementSource(coquiPlayer);
+          sourceNode.connect(gainNode);
+          gainNode.connect(destination);
+          gainNode.connect(audioContext.destination);
+          await audioContext.resume();
+        };
+
+        const ensureCompositeStream = async () => {
+          if (compositeStream) {
+            await ensureAudioGraph();
+            return compositeStream;
+          }
+
+          await ensureAudioGraph();
+          const sourceUrl = (initialSourceVideoUrl || '').trim();
+          if (sourceUrl) {
+            try {
+              narrativeSourceVideo.hidden = false;
+              if (!narrativeSourceVideo.src) {
+                narrativeSourceVideo.src = sourceUrl;
+              }
+              await narrativeSourceVideo.play();
+              const videoStream = narrativeSourceVideo.captureStream();
+              const videoTracks = videoStream.getVideoTracks();
+              const audioTracks = videoStream.getAudioTracks();
+              if (!videoTracks.length) {
+                logger.error('Narrative source video stream does not expose a video track.', {
+                  sourceUrl,
+                  sessionId: streamSession.sessionId,
+                });
+                throw new Error('Narrative source video does not provide a video track for WHIP.');
+              }
+              compositeStream = new MediaStream([
+                ...videoTracks,
+                ...audioTracks,
+              ]);
+              drawCanvas('Publishing YouTube source video feed through WHIP.');
+              return compositeStream;
+            } catch (error) {
+              logger.error('Failed to prepare narrative source video for WHIP publishing.', {
+                sourceUrl,
+                sessionId: streamSession.sessionId,
+                error,
+              });
+              throw error;
+            }
+          }
+
+          drawCanvas('Theia canvas capture ready for WHIP publishing.');
+          const canvasStream = animationCanvas.captureStream(30);
+          compositeStream = new MediaStream([...canvasStream.getVideoTracks(), ...destination.stream.getAudioTracks()]);
+          return compositeStream;
+        };
+
+        const hydrateStreamSession = async () => {
+          await ensureStreamMatch();
+          validateStreamSession();
+          return streamSession;
+        };
+
+        const refreshStreamSessionAfterWhip = async () => {
+          await ensureStreamMatch();
+          streamSession.whepUrl = streamSession.whepUrl || `${window.location.origin}/streams/${streamSession.sessionId}/whep`;
+          return streamSession;
+        };
+
+        const publishWhip = async () => {
+          await hydrateStreamSession();
+          const stream = await ensureCompositeStream();
+          if (publisherPc) {
+            closePeerConnection(publisherPc);
+          }
+          publisherPc = new RTCPeerConnection(rtcConfig);
+          publisherPc.onconnectionstatechange = () => {
+            logPeerConnectionState('WHIP publisher', publisherPc, { sessionId: streamSession.sessionId });
+            setStatus(`WHIP publishing connection: ${publisherPc.connectionState}.`);
+          };
+          publisherPc.oniceconnectionstatechange = () => {
+            logPeerConnectionState('WHIP publisher ICE', publisherPc, { sessionId: streamSession.sessionId });
+          };
+          stream.getTracks().forEach((track) => publisherPc.addTrack(track, stream));
+          const offer = await publisherPc.createOffer();
+          await publisherPc.setLocalDescription(offer);
+          await waitForIceGatheringComplete(publisherPc);
+          const whipUrl = streamSession.whipUrl || `${window.location.origin}/streams/${streamSession.sessionId}/whip`;
+          const response = await fetch(whipUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/sdp' },
+            body: publisherPc.localDescription.sdp,
+          });
+          if (!response.ok) {
+            const responseSummary = await summarizeResponse(response);
+            logger.error('WHIP publish request returned a non-2xx response.', {
+              sessionId: streamSession.sessionId,
+              whipUrl,
+              localDescriptionLength: publisherPc.localDescription?.sdp?.length || 0,
+              response: responseSummary,
+            });
+            throw new Error(`WHIP connection failed with status ${responseSummary.status}`);
+          }
+          const playbackHeader = response.headers.get('livepeer-playback-url');
+          if (playbackHeader) {
+            streamSession.whepUrl = playbackHeader
+              .replace('fra-ai-prod-livepeer-ai-gateway-0.livepeer.com', 'ai.livepeer.com');
+          }
+          await publisherPc.setRemoteDescription({ type: 'answer', sdp: await response.text() });
+          await refreshStreamSessionAfterWhip();
+        };
+
+        const createViewerPeerConnection = () => {
+          viewerPc = new RTCPeerConnection(rtcConfig);
+          viewerPc.addTransceiver('video', { direction: 'recvonly' });
+          viewerPc.addTransceiver('audio', { direction: 'recvonly' });
+          viewerPc.onicecandidate = handleViewerIceCandidate;
+          viewerPc.onconnectionstatechange = () => {
+            logPeerConnectionState('WHEP viewer', viewerPc, { sessionId: streamSession.sessionId, whepResourceUrl });
+          };
+          viewerPc.oniceconnectionstatechange = () => {
+            logPeerConnectionState('WHEP viewer ICE', viewerPc, { sessionId: streamSession.sessionId, whepResourceUrl });
+          };
+          viewerPc.ontrack = (event) => {
+            video.srcObject = event.streams[0];
+          };
+          return viewerPc;
+        };
+
+        const destroyViewerSession = async () => {
+          if (whepResourceUrl) {
+            try {
+              await fetch(whepResourceUrl, { method: 'DELETE' });
+            } catch (error) {
+              console.warn('Unable to DELETE WHEP resource during cleanup.', {
+                error,
+                whepResourceUrl,
+                sessionId: streamSession.sessionId,
+              });
+            }
+          }
+          whepResourceUrl = null;
+          if (viewerPc) {
+            viewerPc.close();
+            viewerPc = null;
+          }
+        };
+
+        const startWhepPlayback = async () => {
+          await refreshStreamSessionAfterWhip();
+          const initialPollIntervalMs = 5000;
+          const maxPollIntervalMs = 30000;
+          let attempt = 0;
+          let pollIntervalMs = initialPollIntervalMs;
+          let lastError;
+
+          while (pollIntervalMs <= maxPollIntervalMs) {
+            attempt += 1;
+            await destroyViewerSession();
+            const peerConnection = createViewerPeerConnection();
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+            await waitForIceGatheringComplete(peerConnection);
+            const whepUrl = streamSession.whepUrl || `${window.location.origin}/streams/${streamSession.sessionId}/whep`;
+            const response = await fetch(whepUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/sdp' },
+              body: peerConnection.localDescription.sdp,
+            });
+
+            if (response.ok) {
+              const resourceLocation = response.headers.get('location');
+              whepResourceUrl = resourceLocation ? new URL(resourceLocation, window.location.origin).toString() : null;
+              await peerConnection.setRemoteDescription({ type: 'answer', sdp: await response.text() });
+              await video.play().catch(() => {});
+              return;
+            }
+
+            const responseSummary = await summarizeResponse(response);
+            lastError = new Error(`WHEP connection failed with status ${responseSummary.status}`);
+            logger.error('WHEP playback request returned a non-2xx response; retrying with backoff.', {
+              attempt,
+              pollIntervalMs,
+              sessionId: streamSession.sessionId,
+              whepUrl,
+              localDescriptionLength: peerConnection.localDescription?.sdp?.length || 0,
+              response: responseSummary,
+            });
+            setStatus(`WHIP connected. Waiting for WHEP (attempt ${attempt}, retry in ${Math.round(pollIntervalMs / 1000)}s)...`);
+            await sleep(pollIntervalMs);
+            pollIntervalMs = Math.min(pollIntervalMs + 2000, maxPollIntervalMs + 2000);
+          }
+
+          logger.error('WHEP playback failed after exhausting the configured backoff retries.', {
+            attempts: attempt,
+            sessionId: streamSession.sessionId,
+            lastError,
+          });
+          throw lastError;
+        };
+
+        const connectStream = async () => {
+          if (connectPromise) {
+            return connectPromise;
+          }
+
+          connectPromise = (async () => {
+            try {
+              setStatus('Connecting WHIP/WHEP...');
+              drawCanvas('Preparing Theia canvas feed for WHIP...');
+              await publishWhip();
+              setStatus('Canvas feed published through WHIP. Waiting for WHEP playback...');
+              await startWhepPlayback();
+              streamReady = true;
+              setStatus('WHIP/WHEP connected.');
+            } catch (error) {
+              logger.error('Livepeer connection failed while publishing the canvas feed:', error);
+              setStatus(`Reading locally. Stream connection failed: ${error.message}`);
+              throw error;
+            } finally {
+              connectPromise = null;
+            }
+          })();
+
+          return connectPromise;
+        };
+
+        const fetchChunkAudioUrl = (index) => `/tts/coqui?sessionId=${encodeURIComponent(streamSession.sessionId)}&chunkIndex=${index}`;
+
+        const stopPlayback = () => {
+          cancelled = true;
+          playbackToken += 1;
+          stopPromptUpdates();
+          coquiPlayer.pause();
+          coquiPlayer.removeAttribute('src');
+          coquiPlayer.load();
+          items.forEach((item) => item.classList.remove('active'));
+          setStatus('Reading stopped.');
+        };
+
+        const playChunk = async (index, token) => {
+          if (cancelled || token !== playbackToken) {
+            return;
+          }
+          if (index >= items.length) {
+            stopPromptUpdates();
+            setStatus('Reading complete.');
+            return;
+          }
+
+          currentIndex = index;
+          items.forEach((item, itemIndex) => item.classList.toggle('active', itemIndex === index));
+          const text = items[index].dataset.text;
+          drawCanvas(text);
+          setStatus(`Reading chunk ${index + 1} of ${items.length} with Coqui TTS...`);
+
+          const audioUrl = fetchChunkAudioUrl(index + 1);
+          coquiPlayer.src = audioUrl;
+          coquiPlayer.currentTime = 0;
+
+          try {
+            await coquiPlayer.play();
+          } catch (error) {
+            logger.error('Coqui audio playback failed to start.', {
+              sessionId: streamSession.sessionId,
+              index,
+              audioUrl,
+              error,
+            });
+            setStatus('Coqui TTS playback failed to start.');
+            return;
+          }
+
+          await new Promise((resolve, reject) => {
+            const onEnded = () => {
+              cleanup();
+              resolve();
+            };
+            const onError = () => {
+              cleanup();
+              reject(new Error('The Coqui TTS audio element reported an error.'));
+            };
+            const cleanup = () => {
+              coquiPlayer.removeEventListener('ended', onEnded);
+              coquiPlayer.removeEventListener('error', onError);
+            };
+
+            coquiPlayer.addEventListener('ended', onEnded, { once: true });
+            coquiPlayer.addEventListener('error', onError, { once: true });
+          }).catch((error) => {
+            logger.error('Coqui TTS audio playback failed mid-chunk.', {
+              sessionId: streamSession.sessionId,
+              index,
+              error,
+            });
+            setStatus('Coqui TTS failed on the current chunk.');
+          });
+
+          if (!cancelled && token === playbackToken) {
+            await playChunk(index + 1, token);
+          }
+        };
+
+        playButton.addEventListener('click', async () => {
+          if (!items.length) {
+            logger.error('Read book requested without prepared chunks.', { hasPreparedStream, sessionId: streamSession.sessionId });
+            setStatus('No book chunks are available yet. Search and prepare a narrative source first.');
+            return;
+          }
+
+          cancelled = false;
+          playbackToken += 1;
+          const token = playbackToken;
+          await ensureAudioGraph();
+          if (audioContext && audioContext.state === 'suspended') {
+            await audioContext.resume();
+          }
+
+          if (!streamReady) {
+            connectStream().catch((error) => {
+              logger.error('Streaming setup failed while Coqui TTS continued:', error);
+            });
+          }
+
+          startPromptUpdates();
+          const initialPrompt = chooseRandomPromptSentence();
+          if (initialPrompt) {
+            pushPromptUpdate(initialPrompt);
+          }
+          playChunk(0, token);
+        });
+
+        stopButton.addEventListener('click', () => {
+          stopPlayback();
+        });
+
+        window.addEventListener('beforeunload', () => {
+          stopPromptUpdates();
+          destroyViewerSession();
+          if (publisherPc) {
+            closePeerConnection(publisherPc);
+          }
+        });
+
+        connectButton.addEventListener('click', () => {
+          if (!hasPreparedStream) {
+            logger.error('Connect stream requested before a stream was prepared.', { sessionId: streamSession.sessionId });
+            setStatus('Search and prepare a narrative source before connecting WHIP/WHEP.');
+            return;
+          }
+          connectStream();
+        });
+        drawCanvas(hasPreparedStream ? 'Ready to play the prepared narrative source on the published Theia canvas.' : 'Theia canvas ready. Search and prepare a narrative source to start streaming.');
+      })();
     </script>
     <script src="{% static 'audiobook/app.js' %}"></script>
   </body>

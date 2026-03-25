@@ -40,6 +40,7 @@ class NarrativeExperience:
     cache_hit: bool = False
     source_audio_path: str = ""
     source_audio_mime_type: str = ""
+    source_video_url: str = ""
 
 
 @dataclass
@@ -679,11 +680,101 @@ class NarrativeModeProvider:
     THIRDY_PARTS_STORYTEL = "THIRDY_PARTS_STORYTEL"
     WEB_RESEARCH_TTS = "WEB_RESEARCH_TTS"
     OPENAI_SEARCH = "OPENAI_SEARCH"
+    YOUTUBE_SEARCH = "YOUTUBE_SEARCH"
+
+
+class YouTubeSearchNarrativeClient:
+    def __init__(self) -> None:
+        self.api_key = os.getenv("YOUTUBE_API_KEY", "").strip()
+        self.base_url = os.getenv("YOUTUBE_API_BASE_URL", "https://www.googleapis.com/youtube/v3")
+        self.timeout = float(os.getenv("YOUTUBE_API_TIMEOUT_SECONDS", "20"))
+        self.max_results = int(os.getenv("YOUTUBE_API_MAX_RESULTS", "5"))
+
+    def build_experience(self, query: str) -> NarrativeExperience:
+        if not self.api_key:
+            logger.error("YOUTUBE_SEARCH mode requested without YOUTUBE_API_KEY configured.")
+            raise UpstreamServiceError("YOUTUBE_SEARCH requires YOUTUBE_API_KEY.")
+
+        result = self._search_video(query)
+        return NarrativeExperience(
+            title=result["title"],
+            author=result["author"],
+            pdf_url=result["video_url"],
+            chunks=[
+                NarrativeChunk(
+                    chapter_title="YouTube audiobook source",
+                    chunk_index=1,
+                    text=result["summary"],
+                )
+            ],
+            storage_path="youtube-search-api",
+            source_video_url=result["video_url"],
+        )
+
+    def _search_video(self, query: str) -> dict[str, str]:
+        normalized_query = f"{query} audiobook"
+        params = {
+            "part": "snippet",
+            "q": normalized_query,
+            "type": "video",
+            "maxResults": str(self.max_results),
+            "safeSearch": "strict",
+            "key": self.api_key,
+        }
+        with httpx.Client(timeout=self.timeout) as client:
+            try:
+                response = client.get(f"{self.base_url}/search", params=params)
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                logger.error(
+                    "YouTube API search failed with status %s for query '%s': %s",
+                    exc.response.status_code,
+                    query,
+                    exc,
+                )
+                raise UpstreamServiceError("YouTube API search failed.") from exc
+            except httpx.HTTPError as exc:
+                logger.error("YouTube API connection error for query '%s': %s", query, exc)
+                raise UpstreamServiceError("YouTube API is unavailable right now.") from exc
+
+        payload = response.json()
+        items = payload.get("items", [])
+        if not isinstance(items, list) or not items:
+            logger.error("YouTube API search returned no items for query '%s': %s", query, payload)
+            raise UpstreamServiceError("No YouTube audiobook video found for this request.")
+
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            video_id = str(((item.get("id") or {}).get("videoId")) or "").strip()
+            if not video_id:
+                continue
+            snippet = item.get("snippet") or {}
+            title = str(snippet.get("title") or query).strip() or query
+            author = str(snippet.get("channelTitle") or "Unknown channel").strip()
+            summary = (
+                str(snippet.get("description") or f"YouTube audiobook source for {query}.").strip()
+                or f"YouTube audiobook source for {query}."
+            )
+            return {
+                "title": title,
+                "author": author or "Unknown channel",
+                "video_url": f"https://www.youtube.com/watch?v={video_id}",
+                "summary": summary,
+            }
+
+        logger.error(
+            "YouTube API search returned items but without usable videoId for query '%s': %s",
+            query,
+            payload,
+        )
+        raise UpstreamServiceError("No usable YouTube audiobook video found for this request.")
 
 
 class NarrativeClientFactory:
     @staticmethod
-    def create() -> WebResearchNarrativeClient | OpenAiSearchNarrativeClient:
+    def create(
+    ) -> WebResearchNarrativeClient | OpenAiSearchNarrativeClient | YouTubeSearchNarrativeClient:
         provider = (
             os.getenv("NARRATIVE_MODE_PROVIDER", NarrativeModeProvider.WEB_RESEARCH_TTS)
             .strip()
@@ -696,6 +787,8 @@ class NarrativeClientFactory:
             return WebResearchNarrativeClient()
         if provider == NarrativeModeProvider.OPENAI_SEARCH:
             return OpenAiSearchNarrativeClient()
+        if provider == NarrativeModeProvider.YOUTUBE_SEARCH:
+            return YouTubeSearchNarrativeClient()
         logger.error("Unsupported NARRATIVE_MODE_PROVIDER configured: %s", provider)
         raise UpstreamServiceError("Unsupported NARRATIVE_MODE_PROVIDER configuration.")
 

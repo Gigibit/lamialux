@@ -14,6 +14,7 @@ from audiobook.services import (
     StreamSession,
     UpstreamServiceError,
     WebResearchNarrativeClient,
+    YouTubeSearchNarrativeClient,
 )
 from audiobook.views import STREAM_SESSIONS
 
@@ -42,6 +43,16 @@ class HomeViewTests(TestCase):
         self.assertContains(response, 'Spotify search · Livepeer WHIP/WHEP')
         self.assertContains(response, 'Search track and prepare stream')
         self.assertContains(response, 'id="music-player" preload="none"')
+        self.assertContains(response, 'id="theia-canvas"')
+        self.assertContains(response, 'id="theia-canvas-overlay"')
+        self.assertNotContains(response, 'id="narration-canvas"')
+        self.assertContains(response, "Canvas preview")
+        self.assertContains(response, "Canvas ready. Search and prepare a narrative source")
+        self.assertContains(response, 'id="connect-stream" disabled')
+        self.assertContains(response, "const hasPreparedStream = false;")
+        self.assertContains(response, 'id="coqui-player"')
+        self.assertContains(response, 'id="narrative-source-video"')
+        self.assertNotContains(response, "Open downloaded PDF source")
 
     @patch("audiobook.views.DaydreamClient.create_livepeer_stream_session")
     @patch("audiobook.views.WebResearchNarrativeClient.build_experience")
@@ -360,6 +371,10 @@ class NarrativeClientFactoryTests(TestCase):
     def test_factory_returns_openai_search_client(self) -> None:
         self.assertIsInstance(NarrativeClientFactory.create(), OpenAiSearchNarrativeClient)
 
+    @patch.dict("os.environ", {"NARRATIVE_MODE_PROVIDER": "YOUTUBE_SEARCH"}, clear=False)
+    def test_factory_returns_youtube_search_client(self) -> None:
+        self.assertIsInstance(NarrativeClientFactory.create(), YouTubeSearchNarrativeClient)
+
 
 class OpenAiSearchNarrativeClientTests(TestCase):
     def test_parse_openai_search_response_extracts_json(self) -> None:
@@ -386,3 +401,42 @@ class OpenAiSearchNarrativeClientTests(TestCase):
         )
 
         self.assertEqual(parsed["video_url"], "https://example.com/dune.mp4")
+
+
+class YouTubeSearchNarrativeClientTests(TestCase):
+    @patch.dict("os.environ", {"YOUTUBE_API_KEY": "abc123"}, clear=False)
+    @patch("audiobook.services.httpx.Client")
+    def test_search_video_returns_watch_url(self, http_client) -> None:
+        client = YouTubeSearchNarrativeClient()
+
+        class DummyResponse:
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> dict[str, object]:
+                return {
+                    "items": [
+                        {
+                            "id": {"videoId": "xyz987"},
+                            "snippet": {
+                                "title": "Dune Audiobook",
+                                "channelTitle": "Narrator Channel",
+                                "description": "Part 1.",
+                            },
+                        }
+                    ]
+                }
+
+        class DummyClient:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+            def get(self, *args, **kwargs):
+                return DummyResponse()
+
+        http_client.return_value = DummyClient()
+        result = client._search_video("Dune")
+        self.assertEqual(result["video_url"], "https://www.youtube.com/watch?v=xyz987")
