@@ -89,6 +89,43 @@
     ? sentencePool[Math.floor(Math.random() * sentencePool.length)]
     : '';
   const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+  const waitForIceGatheringComplete = async (pc) => new Promise((resolve) => {
+    if (!pc || pc.iceGatheringState === 'complete') {
+      resolve();
+      return;
+    }
+    const onIceGatheringStateChange = () => {
+      if (pc.iceGatheringState === 'complete') {
+        pc.removeEventListener('icegatheringstatechange', onIceGatheringStateChange);
+        resolve();
+      }
+    };
+    pc.addEventListener('icegatheringstatechange', onIceGatheringStateChange);
+  });
+  const parseRelativeWhepResourcePath = (locationHeader) => {
+    if (!locationHeader) {
+      return '';
+    }
+    try {
+      return new URL(locationHeader, window.location.origin).pathname;
+    } catch (error) {
+      logger.error('WHEP location header parsing failed.', { error, locationHeader });
+      return '';
+    }
+  };
+  const buildTrickleIceSdpFragment = (candidate, ufrag, mid) => {
+    if (!candidate || !candidate.candidate || !ufrag) {
+      return '';
+    }
+    return [
+      'a=ice-options:trickle',
+      `a=ice-ufrag:${ufrag}`,
+      `m=video 9 UDP/TLS/RTP/SAVPF 96`,
+      `a=mid:${mid || '0'}`,
+      `a=${candidate.candidate}`,
+      '',
+    ].join('\r\n');
+  };
   const isLikelyDirectMediaUrl = (url) => /\.(mp4|m4v|mov|webm|m3u8|mp3|m4a|ogg|wav)(\?|#|$)/i.test(url);
   const isUnsupportedNarrativeSourceUrl = (url) => {
     if (!url) {
@@ -658,6 +695,37 @@
 
   const connectWhep = async () => {
     viewerPc = new RTCPeerConnection(rtcConfig);
+    let localIceUfrag = '';
+    let trickleBuffer = [];
+    let trickleFlushTimerId = null;
+    const flushTrickleBuffer = async () => {
+      if (!whepResourceUrl || !trickleBuffer.length) {
+        return;
+      }
+      const candidatesToFlush = trickleBuffer;
+      trickleBuffer = [];
+      for (const candidateInfo of candidatesToFlush) {
+        const fragment = buildTrickleIceSdpFragment(candidateInfo.candidate, localIceUfrag, candidateInfo.mid);
+        if (!fragment) {
+          continue;
+        }
+        try {
+          const patchResponse = await fetch(whepResourceUrl, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/trickle-ice-sdpfrag' },
+            body: fragment,
+          });
+          if (!patchResponse.ok) {
+            logger.error('WHEP trickle ICE PATCH returned a non-2xx response.', {
+              status: patchResponse.status,
+              whepResourceUrl,
+            });
+          }
+        } catch (error) {
+          logger.error('WHEP trickle ICE PATCH failed.', { error, whepResourceUrl });
+        }
+      }
+    };
     viewerPc.addEventListener('track', (event) => {
       const [remoteStream] = event.streams;
       if (remoteStream) {
@@ -670,20 +738,44 @@
     viewerPc.addEventListener('iceconnectionstatechange', () => {
       logPeerConnectionState('WHEP viewer ICE', viewerPc, { sessionId: streamSession.sessionId, whepResourceUrl });
     });
+    viewerPc.addEventListener('icecandidate', (event) => {
+      if (!event.candidate) {
+        return;
+      }
+      trickleBuffer.push({
+        candidate: event.candidate,
+        mid: event.candidate.sdpMid || '0',
+      });
+      if (whepResourceUrl) {
+        if (trickleFlushTimerId) {
+          window.clearTimeout(trickleFlushTimerId);
+        }
+        trickleFlushTimerId = window.setTimeout(() => {
+          trickleFlushTimerId = null;
+          void flushTrickleBuffer();
+        }, 150);
+      }
+    });
 
     const offer = await viewerPc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true });
     await viewerPc.setLocalDescription(offer);
+    await waitForIceGatheringComplete(viewerPc);
+    const finalizedOfferSdp = viewerPc.localDescription && viewerPc.localDescription.sdp
+      ? viewerPc.localDescription.sdp
+      : offer.sdp;
+    const ufragMatch = finalizedOfferSdp.match(/^a=ice-ufrag:(.+)$/m);
+    localIceUfrag = ufragMatch ? ufragMatch[1].trim() : '';
 
     let lastError = null;
     for (let attempt = 1; attempt <= 4; attempt += 1) {
       const response = await fetch(streamSession.whepUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/sdp' },
-        body: offer.sdp,
+        body: finalizedOfferSdp,
       });
       const responseSummary = await summarizeResponse(response);
       if (response.ok) {
-        whepResourceUrl = responseSummary.location;
+        whepResourceUrl = parseRelativeWhepResourcePath(responseSummary.location);
         if (!responseSummary.body) {
           logger.error('WHEP playback response was missing the SDP answer body.', responseSummary);
           throw new Error('WHEP connection failed because the SDP answer was empty.');
@@ -697,6 +789,7 @@
           });
           throw error;
         }
+        await flushTrickleBuffer();
         return;
       }
       lastError = new Error(`WHEP connection failed with status ${responseSummary.status}`);
