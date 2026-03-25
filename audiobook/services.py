@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import sqlite3
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from html import unescape
 from pathlib import Path
@@ -791,6 +792,157 @@ class NarrativeClientFactory:
             return YouTubeSearchNarrativeClient()
         logger.error("Unsupported NARRATIVE_MODE_PROVIDER configured: %s", provider)
         raise UpstreamServiceError("Unsupported NARRATIVE_MODE_PROVIDER configuration.")
+
+
+class YouTubeStoryPromptClient:
+    def __init__(self) -> None:
+        self.timeout = float(os.getenv("YOUTUBE_API_TIMEOUT_SECONDS", "20"))
+        self.story_prompt_model = os.getenv("OPENAI_STORY_PROMPT_MODEL", "gpt-4.1-mini")
+        self.openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
+        self.openai_base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+
+    def build_story_prompt(
+        self,
+        *,
+        video_id: str,
+        current_seconds: float,
+        delta_seconds: float,
+        fallback_text: str,
+    ) -> tuple[str, str]:
+        transcript_text = self._extract_transcript_window(
+            video_id=video_id,
+            current_seconds=current_seconds,
+            delta_seconds=delta_seconds,
+        )
+        source_text = transcript_text or fallback_text.strip()
+        if not source_text:
+            logger.error(
+                "Story prompt update failed because no source text was available. "
+                "video_id=%s current_seconds=%s delta_seconds=%s",
+                video_id,
+                current_seconds,
+                delta_seconds,
+            )
+            raise UpstreamServiceError("No story text is available to update the prompt.")
+        return self._rewrite_prompt_with_openai(source_text), source_text
+
+    def _extract_transcript_window(
+        self,
+        *,
+        video_id: str,
+        current_seconds: float,
+        delta_seconds: float,
+    ) -> str:
+        params = {
+            "v": video_id,
+            "lang": "en",
+            "fmt": "srv3",
+        }
+        with httpx.Client(timeout=self.timeout) as client:
+            try:
+                response = client.get("https://www.youtube.com/api/timedtext", params=params)
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                logger.error(
+                    "YouTube transcript request failed with status %s for video_id=%s: %s",
+                    exc.response.status_code,
+                    video_id,
+                    exc,
+                )
+                return ""
+            except httpx.HTTPError as exc:
+                logger.error(
+                    "YouTube transcript request connection error for video_id=%s: %s",
+                    video_id,
+                    exc,
+                )
+                return ""
+
+        if not response.text.strip():
+            logger.error(
+                "YouTube transcript request returned an empty payload for video_id=%s.",
+                video_id,
+            )
+            return ""
+
+        try:
+            root = ET.fromstring(response.text)
+        except ET.ParseError as exc:
+            logger.error(
+                "YouTube transcript XML parsing failed for video_id=%s: %s",
+                video_id,
+                exc,
+            )
+            return ""
+
+        min_seconds = max(current_seconds - delta_seconds, 0)
+        max_seconds = current_seconds + delta_seconds
+        snippets: list[str] = []
+        for node in root.findall(".//text"):
+            start = float(node.attrib.get("start", "0") or "0")
+            duration = float(node.attrib.get("dur", "0") or "0")
+            end = start + duration
+            if end < min_seconds or start > max_seconds:
+                continue
+            line_text = unescape("".join(node.itertext())).strip()
+            line_text = re.sub(r"\s+", " ", line_text)
+            if line_text:
+                snippets.append(line_text)
+
+        return " ".join(snippets).strip()
+
+    def _rewrite_prompt_with_openai(self, source_text: str) -> str:
+        compact_source = source_text.strip()
+        if not self.openai_api_key:
+            return compact_source[:700]
+
+        payload = {
+            "model": self.story_prompt_model,
+            "input": (
+                "Rewrite the following audiobook moment into one concise cinematic visual prompt "
+                "for a live diffusion stream. Keep essential narrative continuity and tone. "
+                "Return plain text only, max 40 words.\n\n"
+                f"Story moment:\n{compact_source[:3000]}"
+            ),
+        }
+        headers = {
+            "Authorization": f"Bearer {self.openai_api_key}",
+            "Content-Type": "application/json",
+        }
+
+        with httpx.Client(timeout=self.timeout) as client:
+            try:
+                response = client.post(
+                    f"{self.openai_base_url}/responses",
+                    headers=headers,
+                    json=payload,
+                )
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                logger.error(
+                    "OpenAI story prompt rewrite failed with status %s: %s",
+                    exc.response.status_code,
+                    exc,
+                )
+                return compact_source[:700]
+            except httpx.HTTPError as exc:
+                logger.error("OpenAI story prompt rewrite connection error: %s", exc)
+                return compact_source[:700]
+
+        rewritten = self._parse_openai_output_text(response.json())
+        return rewritten or compact_source[:700]
+
+    def _parse_openai_output_text(self, payload: dict[str, object]) -> str:
+        fragments: list[str] = []
+        for item in payload.get("output", []):
+            if not isinstance(item, dict) or item.get("type") != "message":
+                continue
+            for content in item.get("content", []):
+                if isinstance(content, dict) and content.get("type") == "output_text":
+                    text_value = str(content.get("text") or "").strip()
+                    if text_value:
+                        fragments.append(text_value)
+        return " ".join(fragments).strip()
 
 
 class DaydreamClient:

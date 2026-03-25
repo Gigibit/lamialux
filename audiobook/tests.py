@@ -47,9 +47,11 @@ class HomeViewTests(TestCase):
         self.assertContains(response, 'id="theia-canvas-overlay"')
         self.assertNotContains(response, 'id="narration-canvas"')
         self.assertContains(response, "Canvas preview")
-        self.assertContains(response, "Canvas ready. Search and prepare a narrative source")
-        self.assertContains(response, 'id="connect-stream" disabled')
-        self.assertContains(response, "const hasPreparedStream = false;")
+        self.assertContains(
+            response,
+            "Canvas ready. Search and prepare a song to enable playback controls.",
+        )
+        self.assertContains(response, 'id="fullscreen-output"')
         self.assertContains(response, 'id="coqui-player"')
         self.assertContains(response, 'id="narrative-source-video"')
         self.assertNotContains(response, "Open downloaded PDF source")
@@ -487,3 +489,82 @@ class YouTubeSearchNarrativeClientTests(TestCase):
         http_client.return_value = DummyClient()
         result = client._search_video("Dune")
         self.assertEqual(result["video_url"], "https://www.youtube.com/watch?v=xyz987")
+
+
+class StoryPromptViewTests(TestCase):
+    def setUp(self) -> None:
+        self.client = Client()
+        STREAM_SESSIONS.clear()
+        STREAM_SESSIONS["browser-story"] = StreamSession(
+            session_id="browser-story",
+            whip_url="https://video.example/whip",
+            whep_url="https://video.example/whep",
+            output_video_url="https://video.example/whep",
+            upstream_stream_id="livepeer-story",
+        )
+
+    @patch("audiobook.views.PromptStreamUpdater.update_prompt")
+    @patch("audiobook.views.YouTubeStoryPromptClient.build_story_prompt")
+    def test_story_prompt_updates_from_video_window(
+        self,
+        build_story_prompt,
+        update_prompt,
+    ) -> None:
+        build_story_prompt.return_value = ("cinematic skyline at dusk", "spoken sentence")
+
+        response = self.client.post(
+            "/streams/browser-story/story-prompt",
+            data=json.dumps(
+                {
+                    "videoId": "DfK0b66vq8E",
+                    "currentSeconds": 42.5,
+                    "fallbackText": "fallback narrative",
+                }
+            ),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        update_prompt.assert_called_once_with(
+            upstream_stream_id="livepeer-story",
+            prompt="cinematic skyline at dusk",
+        )
+
+
+class YouTubeStoryPromptClientTests(TestCase):
+    def test_extract_transcript_window_filters_by_time(self) -> None:
+        from audiobook.services import YouTubeStoryPromptClient
+
+        client = YouTubeStoryPromptClient()
+        xml_payload = (
+            '<transcript>'
+            '<text start="0" dur="2">intro</text>'
+            '<text start="8" dur="4">target scene</text>'
+            '<text start="25" dur="3">ending</text>'
+            "</transcript>"
+        )
+
+        class DummyResponse:
+            text = xml_payload
+
+            def raise_for_status(self) -> None:
+                return None
+
+        class DummyHttpClient:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+            def get(self, *args, **kwargs):
+                return DummyResponse()
+
+        with patch("audiobook.services.httpx.Client", return_value=DummyHttpClient()):
+            transcript = client._extract_transcript_window(
+                video_id="abc123",
+                current_seconds=10,
+                delta_seconds=5,
+            )
+
+        self.assertEqual(transcript, "target scene")
