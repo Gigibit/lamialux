@@ -85,7 +85,7 @@
 
       {% if error %}<p class="error">{{ error }}</p>{% endif %}
 
-      <section class="stream-layout">
+      <section class="stream-layout {% if page == 'book' %}stream-layout-book{% endif %}">
         <article class="panel">
           <div class="section-heading">
             <div>
@@ -120,7 +120,7 @@
               <div class="canvas-shell">
                 <canvas id="theia-canvas" width="1280" height="720"></canvas>
                 <div id="theia-form" aria-hidden="true">
-                  <svg viewBox="0 50 300 300" xmlns="http://www.w3.org/2000/svg" id="theia-form-deeper">
+                  <svg viewBox="0 50 300 300" xmlns="http://www.w3.org/2000/svg" id="theia-form-deeper" class="theia-form-deeper--compact">
                     <defs>
                       <linearGradient id="blondeGradient" x1="0%" y1="0%" x2="0%" y2="100%">
                         <stop offset="0%" stop-color="#fffacd" />
@@ -195,8 +195,8 @@
           <p class="small note">{% if page == 'music' %}When a Spotify preview URL is available, the browser audio graph mixes it into the WHIP input stream together with the canvas video. If preview is missing and a Spotify Web Playback token is configured, playback falls back to Spotify Web Playback SDK.{% else %}Coqui TTS audio is generated on the server and played through the browser audio graph so the narration can be heard locally and embedded into the published WHIP stream.{% endif %}</p>
         </article>
 
-        <aside class="panel chunk-list">
-          {% if page == 'music' %}
+        {% if page == 'music' %}
+          <aside class="panel chunk-list">
             <p class="eyebrow">Track session</p>
             {% if music_track %}
               <ul class="track-facts">
@@ -209,23 +209,8 @@
             {% else %}
               <p class="small">No track prepared yet. Submit a title to load Spotify metadata and prepare the visual music session.</p>
             {% endif %}
-          {% else %}
-            <p class="eyebrow">Book chunks</p>
-            {% if stream %}
-              <p class="small">Stored in {{ stream.storage_path }}</p>
-              <ol>
-                {% for chunk in stream.chunks %}
-                  <li data-text="{{ chunk.text|escape }}">
-                    <strong>{{ chunk.chapter_title }} · {{ chunk.chunk_index }}</strong>
-                    <p>{{ chunk.text|truncatechars:240 }}</p>
-                  </li>
-                {% endfor %}
-              </ol>
-            {% else %}
-              <p class="small">No PDF prepared yet. Submit a query to load chunks for Coqui TTS and stream publishing.</p>
-            {% endif %}
-          {% endif %}
-        </aside>
+          </aside>
+        {% endif %}
       </section>
     </main>
     <script>
