@@ -203,7 +203,7 @@
     let audioStream = null;
     if (page === 'music' && musicPlayer) {
       audioStream = bindAudioElementToGraph(musicPlayer);
-    } else if (page === 'book' && usesSourceNarration && narrativeSourceVideo) {
+    } else if (page === 'book' && isSourceNarrationProvider && narrativeSourceVideo) {
       audioStream = bindAudioElementToGraph(narrativeSourceVideo);
     } else if (page === 'book' && coquiPlayer) {
       audioStream = bindAudioElementToGraph(coquiPlayer);
@@ -217,7 +217,7 @@
       return;
     }
     if (isUnsupportedNarrativeSourceUrl(sourceVideoUrl)) {
-      logger.error('Unsupported narrative source URL detected; direct browser media playback is required.', {
+      logger.log('Narrative source URL is not a direct media file; browser playback will fall back to Coqui TTS.', {
         narrativeModeProvider,
         sourceVideoUrl,
       });
@@ -402,7 +402,7 @@
         return;
       }
       if (isUnsupportedNarrativeSourceUrl(sourceVideoUrl)) {
-        logger.error('Source narration playback blocked because the URL is not a direct media resource.', {
+        logger.log('Source narration URL is not a direct media resource; falling back to Coqui TTS playback.', {
           narrativeModeProvider,
           sourceVideoUrl,
         });
