@@ -8,6 +8,7 @@
   const statusEl = document.getElementById('stream-status');
   const animationCanvas = document.getElementById('theia-canvas');
   const animationOverlay = document.getElementById('theia-canvas-overlay');
+  const theiaFormSvg = document.getElementById('theia-form-deeper');
   const video = document.getElementById('whep-player');
   const coquiPlayer = document.getElementById('coqui-player');
   const musicPlayer = document.getElementById('music-player');
@@ -48,6 +49,13 @@
   let streamReady = false;
   let promptUpdateTimerId = null;
   let storyPromptTimerId = null;
+  let compositeCanvas = null;
+  let compositeContext = null;
+  let compositeFrameTimerId = null;
+  let theiaSvgRefreshTimerId = null;
+  let theiaSvgTexture = null;
+  let theiaSvgTextureUrl = '';
+  let theiaSvgAnimatorId = null;
   let playbackToken = 0;
   let currentIndex = 0;
   let cancelled = false;
@@ -218,6 +226,94 @@
     }
   };
 
+  const updateTheiaLips = (timestampMs) => {
+    if (!theiaFormSvg) {
+      return;
+    }
+    const mouthUpper = theiaFormSvg.querySelector('#mouthUpper');
+    const mouthLower = theiaFormSvg.querySelector('#mouthLower');
+    const mouthInside = theiaFormSvg.querySelector('#mouthInside');
+    if (!mouthUpper || !mouthLower || !mouthInside) {
+      logger.error('Theia form lip animation failed because one or more SVG mouth paths are missing.');
+      return;
+    }
+    const oscillation = (Math.sin(timestampMs / 220) + 1) / 2;
+    const width = 18 + (oscillation * 4);
+    const upperLift = 186 + (oscillation * 1.8);
+    const lowerDrop = 191 + (oscillation * 4.2);
+    const cornerLeft = 150 - width;
+    const cornerRight = 150 + width;
+    mouthUpper.setAttribute('d', `M${cornerLeft} 190 Q150 ${upperLift} ${cornerRight} 190 Q150 ${192 + (oscillation * 1.5)} ${cornerLeft} 190 Z`);
+    mouthLower.setAttribute('d', `M${cornerLeft} 190 Q150 ${lowerDrop} ${cornerRight} 190 Q150 ${191 + (oscillation * 2.6)} ${cornerLeft} 190 Z`);
+    mouthInside.setAttribute('d', `M${cornerLeft + 2} 190 Q150 ${189 + (oscillation * 4.3)} ${cornerRight - 2} 190 Q150 ${190 + (oscillation * 3.5)} ${cornerLeft + 2} 190 Z`);
+  };
+
+  const startTheiaSvgAnimator = () => {
+    if (!theiaFormSvg) {
+      return;
+    }
+    const animate = (timestampMs) => {
+      updateTheiaLips(timestampMs);
+      theiaSvgAnimatorId = window.requestAnimationFrame(animate);
+    };
+    if (!theiaSvgAnimatorId) {
+      theiaSvgAnimatorId = window.requestAnimationFrame(animate);
+    }
+  };
+
+  const refreshTheiaSvgTexture = () => {
+    if (!theiaFormSvg) {
+      return;
+    }
+    try {
+      const serializedSvg = new XMLSerializer().serializeToString(theiaFormSvg);
+      const blob = new Blob([serializedSvg], { type: 'image/svg+xml;charset=utf-8' });
+      const nextUrl = URL.createObjectURL(blob);
+      if (!theiaSvgTexture) {
+        theiaSvgTexture = new Image();
+      }
+      theiaSvgTexture.onload = () => {
+        if (theiaSvgTextureUrl) {
+          URL.revokeObjectURL(theiaSvgTextureUrl);
+        }
+        theiaSvgTextureUrl = nextUrl;
+      };
+      theiaSvgTexture.onerror = () => {
+        logger.error('Theia SVG texture refresh failed because the serialized SVG image could not be decoded.');
+        URL.revokeObjectURL(nextUrl);
+      };
+      theiaSvgTexture.src = nextUrl;
+    } catch (error) {
+      logger.error('Theia SVG serialization failed during canvas composition.', { error });
+    }
+  };
+
+  const stopCompositeFrameLoop = () => {
+    if (compositeFrameTimerId) {
+      window.clearInterval(compositeFrameTimerId);
+      compositeFrameTimerId = null;
+    }
+    if (theiaSvgRefreshTimerId) {
+      window.clearInterval(theiaSvgRefreshTimerId);
+      theiaSvgRefreshTimerId = null;
+    }
+  };
+
+  const startCompositeFrameLoop = () => {
+    if (!compositeCanvas || !compositeContext) {
+      logger.error('Cannot start the composite canvas loop because the composition canvas context is missing.');
+      return;
+    }
+    stopCompositeFrameLoop();
+    compositeFrameTimerId = window.setInterval(() => {
+      compositeContext.clearRect(0, 0, compositeCanvas.width, compositeCanvas.height);
+      compositeContext.drawImage(animationCanvas, 0, 0, compositeCanvas.width, compositeCanvas.height);
+      if (theiaSvgTexture && theiaSvgTexture.complete) {
+        compositeContext.drawImage(theiaSvgTexture, compositeCanvas.width * 0.66, compositeCanvas.height * 0.08, compositeCanvas.width * 0.28, compositeCanvas.height * 0.52);
+      }
+    }, 33);
+  };
+
   const stopStoryPromptUpdates = () => {
     if (storyPromptTimerId) {
       window.clearInterval(storyPromptTimerId);
@@ -318,7 +414,21 @@
 
   const prepareCompositeStream = async () => {
     setOverlay('LamiaLux live canvas', page === 'music' ? 'Visual music canvas ready for WHIP publishing.' : 'Theia canvas capture ready for WHIP publishing.');
-    const canvasStream = animationCanvas.captureStream(30);
+    if (!compositeCanvas) {
+      compositeCanvas = document.createElement('canvas');
+      compositeCanvas.width = animationCanvas.width;
+      compositeCanvas.height = animationCanvas.height;
+      compositeContext = compositeCanvas.getContext('2d');
+      if (!compositeContext) {
+        logger.error('Failed to initialize the offscreen Theia composition canvas context.');
+        throw new Error('Theia composition canvas context is unavailable.');
+      }
+      startTheiaSvgAnimator();
+      refreshTheiaSvgTexture();
+      theiaSvgRefreshTimerId = window.setInterval(refreshTheiaSvgTexture, 120);
+      startCompositeFrameLoop();
+    }
+    const canvasStream = compositeCanvas.captureStream(30);
     compositeStream = new MediaStream([...canvasStream.getVideoTracks()]);
     return compositeStream;
   };
@@ -645,6 +755,15 @@
     await stopMediaElement(musicPlayer);
     await stopMediaElement(narrativeSourceVideo);
     stopYouTubeSourceNarration();
+    stopCompositeFrameLoop();
+    if (theiaSvgAnimatorId) {
+      window.cancelAnimationFrame(theiaSvgAnimatorId);
+      theiaSvgAnimatorId = null;
+    }
+    if (theiaSvgTextureUrl) {
+      URL.revokeObjectURL(theiaSvgTextureUrl);
+      theiaSvgTextureUrl = '';
+    }
     setStatus('Stopped.');
     setOverlay('LamiaLux ready', page === 'music' ? 'Search a track to start visual music playback.' : 'Search a PDF to start narration playback.');
   };
