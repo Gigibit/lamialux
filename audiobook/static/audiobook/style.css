@@ -177,6 +177,10 @@ button:disabled {
   position: relative;
   margin-top: 16px;
 }
+.canvas-shell-preload {
+  opacity: 0;
+  pointer-events: none;
+}
 .canvas-shell canvas {
   margin-top: 0;
   position: relative;
