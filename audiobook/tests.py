@@ -32,7 +32,7 @@ class HomeViewTests(TestCase):
         self.assertContains(response, 'href="/music"')
         self.assertContains(response, 'id="whep-player" autoplay playsinline muted')
         self.assertNotContains(response, 'controls autoplay')
-        self.assertContains(response, 'id="play-media" disabled')
+        self.assertNotContains(response, 'id="play-media"')
         self.assertContains(response, 'class="page-flip-card" id="page-flip-card"')
 
     def test_music_page_renders(self) -> None:
@@ -104,6 +104,7 @@ class HomeViewTests(TestCase):
         self.assertContains(response, "Fear is the mind killer")
         self.assertContains(response, 'data-page="book"')
         self.assertContains(response, "window.lamialuxPageConfig")
+        self.assertContains(response, "Search, download, and read")
         self.assertEqual(STREAM_SESSIONS["browser-uuid"].whip_url, "https://video.example/whip")
 
     @patch("audiobook.views.DaydreamClient.create_livepeer_stream_session")
