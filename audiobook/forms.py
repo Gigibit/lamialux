@@ -20,3 +20,24 @@ class BookRequestForm(forms.Form):
             }
         ),
     )
+
+
+class MusicRequestForm(forms.Form):
+    music_query = forms.CharField(
+        max_length=255,
+        label="Music title",
+        widget=forms.TextInput(
+            attrs={
+                "placeholder": "Try: Teardrop, Time, Midnight City...",
+            }
+        ),
+    )
+    daydream_prompt = forms.CharField(
+        max_length=500,
+        label="Prompt",
+        widget=forms.TextInput(
+            attrs={
+                "placeholder": "neon pulse reacting to the rhythm",
+            }
+        ),
+    )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import logging
@@ -40,6 +41,17 @@ class NarrativeExperience:
     source_audio_path: str = ""
     source_audio_mime_type: str = ""
     source_video_url: str = ""
+
+
+@dataclass
+class MusicExperience:
+    title: str
+    artist: str
+    album: str
+    cover_image_url: str
+    external_url: str
+    preview_url: str
+    provider: str
 
 
 @dataclass
@@ -561,6 +573,109 @@ class WebResearchNarrativeClient:
             raise UpstreamServiceError("Stored narrative chunk cache has an unsupported schema.")
 
 
+class MusicSearchClient:
+    SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token"
+    SPOTIFY_SEARCH_URL = "https://api.spotify.com/v1/search"
+
+    def __init__(self) -> None:
+        self.provider = os.getenv("MUSIC_MODE_PROVIDER", "SPOTIFY").strip().upper()
+        self.timeout = float(os.getenv("SPOTIFY_TIMEOUT_SECONDS", "20"))
+        self.client_id = os.getenv("SPOTIFY_CLIENT_ID", "").strip()
+        self.client_secret = os.getenv("SPOTIFY_CLIENT_SECRET", "").strip()
+
+    def search_track(self, query: str) -> MusicExperience:
+        if self.provider != "SPOTIFY":
+            logger.error("Unsupported MUSIC_MODE_PROVIDER '%s'.", self.provider)
+            raise UpstreamServiceError("Only the SPOTIFY music provider is currently supported.")
+        access_token = self._fetch_spotify_access_token()
+        return self._search_spotify_track(query=query, access_token=access_token)
+
+    def _fetch_spotify_access_token(self) -> str:
+        if not self.client_id or not self.client_secret:
+            logger.error(
+                (
+                    "Spotify search requested without complete credentials. "
+                    "client_id_present=%s client_secret_present=%s"
+                ),
+                bool(self.client_id),
+                bool(self.client_secret),
+            )
+            raise UpstreamServiceError("Spotify credentials are not configured on the server.")
+
+        encoded_credentials = base64.b64encode(
+            f"{self.client_id}:{self.client_secret}".encode("utf-8")
+        ).decode("ascii")
+        with httpx.Client(timeout=self.timeout) as client:
+            try:
+                response = client.post(
+                    self.SPOTIFY_TOKEN_URL,
+                    headers={
+                        "Authorization": f"Basic {encoded_credentials}",
+                        "Content-Type": "application/x-www-form-urlencoded",
+                    },
+                    data={"grant_type": "client_credentials"},
+                )
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                logger.error(
+                    "Spotify token request failed with status %s: %s",
+                    exc.response.status_code,
+                    exc,
+                )
+                raise UpstreamServiceError("Spotify authentication failed.") from exc
+            except httpx.HTTPError as exc:
+                logger.error("Spotify token request connection error: %s", exc)
+                raise UpstreamServiceError("Spotify is unavailable right now.") from exc
+
+        access_token = str(response.json().get("access_token") or "")
+        if not access_token:
+            logger.error(
+                "Spotify token response did not include an access token: %s",
+                response.text,
+            )
+            raise UpstreamServiceError("Spotify authentication returned incomplete data.")
+        return access_token
+
+    def _search_spotify_track(self, *, query: str, access_token: str) -> MusicExperience:
+        with httpx.Client(timeout=self.timeout) as client:
+            try:
+                response = client.get(
+                    self.SPOTIFY_SEARCH_URL,
+                    headers={"Authorization": f"Bearer {access_token}"},
+                    params={"q": query, "type": "track", "limit": 1, "market": "US"},
+                )
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                logger.error(
+                    "Spotify track search failed with status %s for query '%s': %s",
+                    exc.response.status_code,
+                    query,
+                    exc,
+                )
+                raise UpstreamServiceError("Spotify search failed.") from exc
+            except httpx.HTTPError as exc:
+                logger.error("Spotify track search connection error for query '%s': %s", query, exc)
+                raise UpstreamServiceError("Spotify search is unavailable.") from exc
+
+        items = response.json().get("tracks", {}).get("items", [])
+        if not items:
+            logger.error("Spotify returned no tracks for query '%s'.", query)
+            raise UpstreamServiceError("No Spotify track was found for that title.")
+
+        track = items[0]
+        images = track.get("album", {}).get("images") or []
+        artists = track.get("artists") or []
+        return MusicExperience(
+            title=str(track.get("name") or query),
+            artist=", ".join(
+                str(artist.get("name") or "") for artist in artists if artist.get("name")
+            ),
+            album=str(track.get("album", {}).get("name") or ""),
+            cover_image_url=str(images[0].get("url") if images else ""),
+            external_url=str(track.get("external_urls", {}).get("spotify") or ""),
+            preview_url=str(track.get("preview_url") or ""),
+            provider="SPOTIFY",
+        )
 class NarrativeModeProvider:
     THIRDY_PARTS_STORYTEL = "THIRDY_PARTS_STORYTEL"
     WEB_RESEARCH_TTS = "WEB_RESEARCH_TTS"

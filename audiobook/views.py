@@ -9,10 +9,11 @@ from django.shortcuts import render
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
-from .forms import BookRequestForm
+from .forms import BookRequestForm, MusicRequestForm
 from .services import (
     CoquiTtsClient,
     DaydreamClient,
+    MusicSearchClient,
     NarrativeClientFactory,
     PromptStreamUpdater,
     StreamSession,
@@ -54,22 +55,41 @@ def _whep_upstream_url(stream: StreamSession, method: str) -> str:
     return stream.whep_url
 
 
-def home(request: HttpRequest) -> HttpResponse:
-    context: dict[str, object] = {
+def _page_context(page: str) -> dict[str, object]:
+    return {
+        "page": page,
         "book_form": BookRequestForm(),
+        "music_form": MusicRequestForm(),
         "message": "",
         "error": "",
         "stream": None,
+        "music_track": None,
     }
+
+
+def home(request: HttpRequest) -> HttpResponse:
+    return _render_page(request=request, page="book")
+
+
+def music(request: HttpRequest) -> HttpResponse:
+    return _render_page(request=request, page="music")
+
+
+def _render_page(request: HttpRequest, *, page: str) -> HttpResponse:
+    context = _page_context(page)
 
     if request.method == "POST":
         try:
-            context, status_code = _handle_start(request, context)
+            context, status_code = _handle_start(request, context, page=page)
             if status_code >= 400:
-                logger.error("Returning non-2xx response for start action: status=%s", status_code)
+                logger.error(
+                    "Returning non-2xx response for %s start action: status=%s", page, status_code
+                )
             return render(request, "audiobook/home.html", context, status=status_code)
         except Exception as exc:
-            logger.error("Unhandled error while processing home POST: %s", exc, exc_info=True)
+            logger.error(
+                "Unhandled error while processing %s POST: %s", page, exc, exc_info=True
+            )
             context["error"] = "An unexpected server error occurred."
             logger.error("Returning non-2xx response for unhandled server error: status=500")
             return render(request, "audiobook/home.html", context, status=500)
@@ -384,12 +404,23 @@ def _normalize_browser_session_id(request: HttpRequest) -> str:
 def _handle_start(
     request: HttpRequest,
     context: dict[str, object],
+    *,
+    page: str,
+) -> tuple[dict[str, object], int]:
+    if page == "music":
+        return _handle_music_start(request, context)
+    return _handle_book_start(request, context)
+
+
+def _handle_book_start(
+    request: HttpRequest,
+    context: dict[str, object],
 ) -> tuple[dict[str, object], int]:
     form = BookRequestForm(request.POST)
     context["book_form"] = form
 
     if not form.is_valid():
-        logger.error("Invalid start form submission: %s", form.errors)
+        logger.error("Invalid book start form submission: %s", form.errors)
         context["error"] = "Please provide both a book query and a prompt."
         return context, 400
 
@@ -401,32 +432,14 @@ def _handle_start(
         experience = NarrativeClientFactory.create().build_experience(query)
         livepeer_stream_session = DaydreamClient().create_livepeer_stream_session(prompt)
     except UpstreamServiceError as exc:
-        logger.error("Failed to start stream for query '%s': %s", query, exc)
+        logger.error("Failed to start book stream for query '%s': %s", query, exc)
         context["error"] = str(exc)
-        logger.error("Returning non-2xx response for start stream upstream failure: status=502")
+        logger.error("Returning non-2xx response for book stream upstream failure: status=502")
         return context, 502
 
-    initial_output_video_url = (
-        livepeer_stream_session.output_video_url or livepeer_stream_session.whep_url
-    )
-    STREAM_SESSIONS[browser_session_id] = StreamSession(
-        session_id=browser_session_id,
-        upstream_stream_id=livepeer_stream_session.session_id,
-        whip_url=livepeer_stream_session.whip_url,
-        whep_url=livepeer_stream_session.whep_url,
-        output_video_url=initial_output_video_url,
-        initial_whep_url=livepeer_stream_session.whep_url,
-    )
-    STREAM_SESSIONS[livepeer_stream_session.session_id] = StreamSession(
-        session_id=livepeer_stream_session.session_id,
-        upstream_stream_id=livepeer_stream_session.session_id,
-        whip_url=livepeer_stream_session.whip_url,
-        whep_url=livepeer_stream_session.whep_url,
-        output_video_url=initial_output_video_url,
-        initial_whep_url=livepeer_stream_session.whep_url,
-    )
-
+    _store_stream_session(browser_session_id, livepeer_stream_session)
     prepared_stream = {
+        "mode": "book",
         "title": experience.title,
         "author": experience.author,
         "prompt": prompt,
@@ -451,6 +464,80 @@ def _handle_start(
         "The frontend can now reconnect to the matching Livepeer stream session."
     )
     return context, 200
+
+
+def _handle_music_start(
+    request: HttpRequest,
+    context: dict[str, object],
+) -> tuple[dict[str, object], int]:
+    form = MusicRequestForm(request.POST)
+    context["music_form"] = form
+
+    if not form.is_valid():
+        logger.error("Invalid music start form submission: %s", form.errors)
+        context["error"] = "Please provide both a music title and a prompt."
+        return context, 400
+
+    query = form.cleaned_data["music_query"].strip()
+    prompt = form.cleaned_data["daydream_prompt"].strip()
+    browser_session_id = _normalize_browser_session_id(request)
+
+    try:
+        track = MusicSearchClient().search_track(query)
+        livepeer_stream_session = DaydreamClient().create_livepeer_stream_session(prompt)
+    except UpstreamServiceError as exc:
+        logger.error("Failed to start music stream for query '%s': %s", query, exc)
+        context["error"] = str(exc)
+        logger.error("Returning non-2xx response for music stream upstream failure: status=502")
+        return context, 502
+
+    _store_stream_session(browser_session_id, livepeer_stream_session)
+    prepared_stream = {
+        "mode": "music",
+        "title": track.title,
+        "author": track.artist,
+        "prompt": prompt,
+        "storage_path": track.provider,
+        "chunks": [],
+    }
+    request.session["prepared_stream"] = prepared_stream
+    context["stream"] = prepared_stream
+    context["music_track"] = {
+        "title": track.title,
+        "artist": track.artist,
+        "album": track.album,
+        "cover_image_url": track.cover_image_url,
+        "external_url": track.external_url,
+        "preview_url": track.preview_url,
+        "provider": track.provider,
+    }
+    context["message"] = (
+        "Spotify track found and the visual music stream is ready. "
+        "Connect WHIP/WHEP to publish the canvas while the song playback drives the session."
+    )
+    return context, 200
+
+
+def _store_stream_session(browser_session_id: str, livepeer_stream_session: StreamSession) -> None:
+    initial_output_video_url = (
+        livepeer_stream_session.output_video_url or livepeer_stream_session.whep_url
+    )
+    STREAM_SESSIONS[browser_session_id] = StreamSession(
+        session_id=browser_session_id,
+        upstream_stream_id=livepeer_stream_session.session_id,
+        whip_url=livepeer_stream_session.whip_url,
+        whep_url=livepeer_stream_session.whep_url,
+        output_video_url=initial_output_video_url,
+        initial_whep_url=livepeer_stream_session.whep_url,
+    )
+    STREAM_SESSIONS[livepeer_stream_session.session_id] = StreamSession(
+        session_id=livepeer_stream_session.session_id,
+        upstream_stream_id=livepeer_stream_session.session_id,
+        whip_url=livepeer_stream_session.whip_url,
+        whep_url=livepeer_stream_session.whep_url,
+        output_video_url=initial_output_video_url,
+        initial_whep_url=livepeer_stream_session.whep_url,
+    )
 
 
 @csrf_exempt
@@ -522,19 +609,28 @@ def coqui_tts(request: HttpRequest) -> HttpResponse:
         return HttpResponse("Stream session not found.", status=404)
 
     home_stream = request.session.get("prepared_stream")
-    if not home_stream or chunk_index < 1 or chunk_index > len(home_stream.get("chunks", [])):
+    chunks = list(home_stream.get("chunks", [])) if isinstance(home_stream, dict) else []
+    if chunk_index < 1 or chunk_index > len(chunks):
         logger.error(
             (
                 "Coqui TTS requested for unavailable chunk. "
-                "session_id=%s chunk_index=%s available_chunks=%s"
+                "session_id=%s chunk_index=%s total_chunks=%s"
             ),
             session_id,
             chunk_index,
-            len(home_stream.get("chunks", [])) if home_stream else 0,
+            len(chunks),
         )
         logger.error("Returning non-2xx response for missing Coqui chunk: status=404")
-        return HttpResponse("Requested chunk not found.", status=404)
+        return HttpResponse("Chunk not found for this stream session.", status=404)
 
+    text = str(chunks[chunk_index - 1].get("text") or "")
+    try:
+        result = CoquiTtsClient().synthesize(
+            session_id=stream_context.session_id,
+            chunk_index=chunk_index,
+            text=text,
+        )
+    except UpstreamServiceError as exc:
     source_audio_path = str(home_stream.get("source_audio_path") or "").strip()
     source_audio_mime_type = str(home_stream.get("source_audio_mime_type") or "").strip()
     if source_audio_path:
@@ -583,6 +679,7 @@ def coqui_tts(request: HttpRequest) -> HttpResponse:
         logger.error("Returning non-2xx response for missing prepared audio file: status=404")
         return HttpResponse("Prepared audio file not found.", status=404)
 
+    return FileResponse(open(result.audio_path, "rb"), content_type=result.mime_type)
     response = FileResponse(open(audio_file_path, "rb"), content_type=result.mime_type)
     response["Cache-Control"] = "public, max-age=31536000, immutable"
     return response

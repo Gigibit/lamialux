@@ -3,38 +3,83 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>LamiaLux · Narrative Stream</title>
+    <title>LamiaLux · {% if page == 'music' %}Visual Music{% else %}PDF Reader Stream{% endif %}</title>
     {% load static %}
     <link rel="stylesheet" href="{% static 'audiobook/style.css' %}" />
   </head>
-  <body>
+  <body data-page="{{ page }}">
     <main class="container">
-      <section class="hero panel">
+      <nav class="top-nav panel">
         <div>
-          <p class="eyebrow">Narrative search · Coqui TTS · Livepeer WHIP/WHEP</p>
-          <h1>LamiaLux</h1>
-          <p class="subtitle">
-            Search for a narrative source, prepare playable media or generated speech,
-            stream the narration, and publish the same session into Livepeer WHIP while
-            monitoring the WHEP output video.
-          </p>
+          <p class="eyebrow">LamiaLux</p>
+          <h1>Streamed visual narratives</h1>
         </div>
-      </section>
+        <div class="nav-actions">
+          <a href="/" class="nav-icon-button {% if page == 'book' %}active{% endif %}" data-nav-target="book" aria-label="Book section">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H7a3 3 0 0 0-3 3V5.5Zm3 12.5h11V5H6.5A1.5 1.5 0 0 0 5 6.5V19a4.98 4.98 0 0 1 2-.5Z"/></svg>
+          </a>
+          <a href="/music" class="nav-icon-button {% if page == 'music' %}active{% endif %}" data-nav-target="music" aria-label="Music section">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 3v12.55A4 4 0 1 0 18 19V7h4V3h-6Z"/></svg>
+          </a>
+        </div>
+      </nav>
 
-      <section class="panel">
-        <form method="post" class="request-form">
-          {% csrf_token %}
-          <input type="hidden" name="browser_session_id" id="browser-session-id" />
-          <label>
-            <span>{{ book_form.book_query.label }}</span>
-            {{ book_form.book_query }}
-          </label>
-          <label>
-            <span>{{ book_form.daydream_prompt.label }}</span>
-            {{ book_form.daydream_prompt }}
-          </label>
-          <button type="submit">Search, download, and prepare stream</button>
-        </form>
+      <section class="page-flip-shell">
+        <div class="page-flip-card" id="page-flip-card">
+          <section class="hero panel page-face {% if page == 'music' %}music-face{% else %}book-face{% endif %}">
+            {% if page == 'music' %}
+              <div>
+                <p class="eyebrow">Spotify search · Livepeer WHIP/WHEP</p>
+                <h2>Visual music</h2>
+                <p class="subtitle">
+                  Search a music title on the configured <strong>MUSIC_MODE_PROVIDER</strong>, currently Spotify,
+                  then play the track while the same browser session streams the reactive visual canvas into WHIP.
+                </p>
+              </div>
+            {% else %}
+              <div>
+                <p class="eyebrow">PDF search · Coqui TTS · Livepeer WHIP/WHEP</p>
+                <h2>Visual books</h2>
+                <p class="subtitle">
+                  Search for a book PDF, download it, read it with Coqui text-to-speech,
+                  and publish the generated narration together with the reactive canvas into Livepeer.
+                </p>
+              </div>
+            {% endif %}
+          </section>
+
+          <section class="panel">
+            {% if page == 'music' %}
+              <form method="post" class="request-form" data-mode="music">
+                {% csrf_token %}
+                <input type="hidden" name="browser_session_id" id="browser-session-id" />
+                <label>
+                  <span>{{ music_form.music_query.label }}</span>
+                  {{ music_form.music_query }}
+                </label>
+                <label>
+                  <span>{{ music_form.daydream_prompt.label }}</span>
+                  {{ music_form.daydream_prompt }}
+                </label>
+                <button type="submit">Search track and prepare stream</button>
+              </form>
+            {% else %}
+              <form method="post" class="request-form" data-mode="book">
+                {% csrf_token %}
+                <input type="hidden" name="browser_session_id" id="browser-session-id" />
+                <label>
+                  <span>{{ book_form.book_query.label }}</span>
+                  {{ book_form.book_query }}
+                </label>
+                <label>
+                  <span>{{ book_form.daydream_prompt.label }}</span>
+                  {{ book_form.daydream_prompt }}
+                </label>
+                <button type="submit">Search, download, and prepare stream</button>
+              </form>
+            {% endif %}
+          </section>
+        </div>
       </section>
 
       {% if message %}<p class="message">{{ message }}</p>{% endif %}
@@ -45,8 +90,12 @@
           <div class="section-heading">
             <div>
               <p class="eyebrow">Live output</p>
-              <h2>{% if stream %}{{ stream.title }}{% else %}Canvas preview{% endif %}</h2>
+              <h2>{% if stream %}{{ stream.title }}{% else %}{% if page == 'music' %}Visual music preview{% else %}Canvas preview{% endif %}{% endif %}</h2>
             </div>
+            <p class="small" id="stream-session-label">{% if stream %}Session not matched yet.{% else %}{% if page == 'music' %}Search a track to bind this canvas to a stream session.{% else %}Search a PDF to bind this canvas to a stream session.{% endif %}{% endif %}</p>
+          </div>
+          <p class="small">{% if stream %}{{ stream.author }}{% else %}The visible canvas is always mounted so the animation surface is available before streaming starts.{% endif %}</p>
+          <video id="whep-player" autoplay playsinline muted></video>
             <p class="small" id="stream-session-label">{% if stream %}Session not matched yet.{% else %}Search a narrative source to bind this canvas to a stream session.{% endif %}</p>
           </div>
           <p class="small">{% if stream %}{{ stream.author }}{% else %}The visible canvas is always mounted so the animation surface is available before streaming starts.{% endif %}</p>
@@ -60,7 +109,24 @@
             {% if not stream or not stream.source_video_url %}hidden{% endif %}
           ></video>
           <audio id="coqui-player" preload="none" hidden></audio>
+          <audio id="music-player" preload="none" {% if page != 'music' %}hidden{% endif %}></audio>
           <div class="visualizer-stack">
+            {% if page == 'music' %}
+              <div class="music-meta panel-subsection {% if not music_track %}empty-state{% endif %}" id="music-meta">
+                {% if music_track %}
+                  {% if music_track.cover_image_url %}<img src="{{ music_track.cover_image_url }}" alt="{{ music_track.title }} cover" class="cover-art" />{% endif %}
+                  <div>
+                    <p class="eyebrow">{{ music_track.provider }}</p>
+                    <h3>{{ music_track.title }}</h3>
+                    <p class="small">{{ music_track.artist }}{% if music_track.album %} · {{ music_track.album }}{% endif %}</p>
+                    {% if music_track.external_url %}<a href="{{ music_track.external_url }}" target="_blank" rel="noreferrer">Open on Spotify</a>{% endif %}
+                    {% if not music_track.preview_url %}<p class="small note">Spotify did not expose a preview URL for this track, so browser playback may require opening it on Spotify.</p>{% endif %}
+                  </div>
+                {% else %}
+                  <p class="small">Search a song title to load Spotify metadata and optional preview playback.</p>
+                {% endif %}
+              </div>
+            {% endif %}
             <div>
               <p class="eyebrow">Caos canvas</p>
               <div class="canvas-shell">
@@ -71,30 +137,46 @@
           </div>
           <div class="console-actions">
             <button type="button" id="connect-stream" {% if not stream %}disabled{% endif %}>Connect WHIP/WHEP</button>
-            <button type="button" id="play-tts" {% if not stream %}disabled{% endif %}>Read book</button>
-            <button type="button" id="stop-tts" class="secondary">Stop</button>
+            {% if page == 'music' %}
+              <button type="button" id="play-media" {% if not music_track %}disabled{% endif %}>Play track</button>
+            {% else %}
+              <button type="button" id="play-media" {% if not stream %}disabled{% endif %}>Read book</button>
+            {% endif %}
+            <button type="button" id="stop-media" class="secondary">Stop</button>
           </div>
-          <p id="stream-status" class="small">{% if stream %}Idle.{% else %}Canvas ready. Search and prepare a narrative source to enable WHIP/WHEP and TTS controls.{% endif %}</p>
-          <p class="small note">
-            Narration audio is prepared on the server and played through the browser audio graph so the
-            source can be heard locally and embedded into the published WHIP stream.
-          </p>
+          <p id="stream-status" class="small">{% if stream %}Idle.{% else %}{% if page == 'music' %}Canvas ready. Search and prepare a song to enable WHIP/WHEP and playback controls.{% else %}Canvas ready. Search and prepare a stream to enable WHIP/WHEP and TTS controls.{% endif %}{% endif %}</p>
+          <p class="small note">{% if page == 'music' %}When a Spotify preview URL is available, the browser audio graph mixes it into the WHIP input stream together with the canvas video.{% else %}Coqui TTS audio is generated on the server and played through the browser audio graph so the narration can be heard locally and embedded into the published WHIP stream.{% endif %}</p>
         </article>
 
         <aside class="panel chunk-list">
-          <p class="eyebrow">Book chunks</p>
-          {% if stream %}
-            <p class="small">Stored in {{ stream.storage_path }}</p>
-            <ol>
-              {% for chunk in stream.chunks %}
-                <li data-text="{{ chunk.text|escape }}">
-                  <strong>{{ chunk.chapter_title }} · {{ chunk.chunk_index }}</strong>
-                  <p>{{ chunk.text|truncatechars:240 }}</p>
-                </li>
-              {% endfor %}
-            </ol>
+          {% if page == 'music' %}
+            <p class="eyebrow">Track session</p>
+            {% if music_track %}
+              <ul class="track-facts">
+                <li><strong>Provider:</strong> {{ music_track.provider }}</li>
+                <li><strong>Title:</strong> {{ music_track.title }}</li>
+                <li><strong>Artist:</strong> {{ music_track.artist }}</li>
+                <li><strong>Album:</strong> {{ music_track.album|default:'—' }}</li>
+                <li><strong>Preview URL:</strong> {% if music_track.preview_url %}available{% else %}not available{% endif %}</li>
+              </ul>
+            {% else %}
+              <p class="small">No track prepared yet. Submit a title to load Spotify metadata and prepare the visual music session.</p>
+            {% endif %}
           {% else %}
-            <p class="small">No narrative source prepared yet. Submit a query to load chunks for playback and stream publishing.</p>
+            <p class="eyebrow">Book chunks</p>
+            {% if stream %}
+              <p class="small">Stored in {{ stream.storage_path }}</p>
+              <ol>
+                {% for chunk in stream.chunks %}
+                  <li data-text="{{ chunk.text|escape }}">
+                    <strong>{{ chunk.chapter_title }} · {{ chunk.chunk_index }}</strong>
+                    <p>{{ chunk.text|truncatechars:240 }}</p>
+                  </li>
+                {% endfor %}
+              </ol>
+            {% else %}
+              <p class="small">No PDF prepared yet. Submit a query to load chunks for Coqui TTS and stream publishing.</p>
+            {% endif %}
           {% endif %}
         </aside>
       </section>
@@ -104,7 +186,14 @@
       window.CAOS_REMOTE_FALLBACK = "https://raw.githubusercontent.com/Gigibit/ingoya/refs/heads/theia/public/caos.js";
     </script>
 
+    <script src="{% static 'audiobook/caos.js' %}"></script>
+    {{ music_track|json_script:"music-track-data" }}
     <script>
+      window.lamialuxPageConfig = {
+        page: "{{ page }}",
+        hasPreparedStream: {{ stream|yesno:'true,false' }},
+        musicTrack: JSON.parse(document.getElementById('music-track-data').textContent),
+      };
       (() => {
         const browserSessionInput = document.getElementById('browser-session-id');
         const playButton = document.getElementById('play-tts');
@@ -721,6 +810,6 @@
         drawCanvas(hasPreparedStream ? 'Ready to play the prepared narrative source on the published Theia canvas.' : 'Theia canvas ready. Search and prepare a narrative source to start streaming.');
       })();
     </script>
-
+    <script src="{% static 'audiobook/app.js' %}"></script>
   </body>
 </html>
