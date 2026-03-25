@@ -126,19 +126,38 @@
   };
   const loadYouTubeIframeApi = () => {
     if (window.YT && typeof window.YT.Player === 'function') {
-      return Promise.resolve();
+      return Promise.resolve(window.YT);
     }
     if (!youtubePlayerReadyPromise) {
       youtubePlayerReadyPromise = new Promise((resolve, reject) => {
+        const finishIfReady = () => {
+          if (window.YT && typeof window.YT.Player === 'function') {
+            resolve(window.YT);
+            return true;
+          }
+          return false;
+        };
+        if (finishIfReady()) {
+          return;
+        }
         const previousReady = window.onYouTubeIframeAPIReady;
         window.onYouTubeIframeAPIReady = () => {
           if (typeof previousReady === 'function') {
             previousReady();
           }
-          resolve();
+          if (!finishIfReady()) {
+            logger.error('YouTube Iframe API reported ready, but the Player constructor is unavailable.', { sourceVideoUrl });
+            reject(new Error('YouTube player constructor is unavailable.'));
+          }
         };
         const existingScript = document.getElementById('youtube-iframe-api');
         if (existingScript) {
+          window.setTimeout(() => {
+            if (!finishIfReady()) {
+              logger.error('YouTube Iframe API script exists, but the API did not initialize in time.', { sourceVideoUrl });
+              reject(new Error('YouTube Iframe API did not initialize in time.'));
+            }
+          }, 5000);
           return;
         }
         const script = document.createElement('script');
@@ -178,11 +197,30 @@
       host.style.pointerEvents = 'none';
       document.body.appendChild(host);
     }
-    youtubePlayer = new window.YT.Player('youtube-source-player', {
-      width: '320',
-      height: '180',
-      videoId,
-      playerVars: { autoplay: 1, controls: 0, modestbranding: 1, rel: 0 },
+    if (!window.YT || typeof window.YT.Player !== 'function') {
+      logger.error('YouTube player API is unavailable after loading the Iframe API.', { sourceVideoUrl, hasWindowYT: !!window.YT });
+      throw new Error('YouTube player API is unavailable.');
+    }
+    youtubePlayer = await new Promise((resolve, reject) => {
+      const player = new window.YT.Player('youtube-source-player', {
+        width: '320',
+        height: '180',
+        videoId,
+        playerVars: { autoplay: 1, controls: 0, modestbranding: 1, rel: 0 },
+        events: {
+          onReady: () => resolve(player),
+          onError: (event) => {
+            logger.error('YouTube embedded player reported an initialization error.', {
+              sourceVideoUrl,
+              eventData: event && typeof event.data !== 'undefined' ? event.data : null,
+            });
+            reject(new Error('YouTube embedded player failed to initialize.'));
+          },
+        },
+      });
+      window.setTimeout(() => {
+        reject(new Error('Timed out while waiting for the YouTube embedded player to initialize.'));
+      }, 8000);
     });
     return youtubePlayer;
   };
@@ -309,7 +347,16 @@
       compositeContext.clearRect(0, 0, compositeCanvas.width, compositeCanvas.height);
       compositeContext.drawImage(animationCanvas, 0, 0, compositeCanvas.width, compositeCanvas.height);
       if (theiaSvgTexture && theiaSvgTexture.complete) {
-        compositeContext.drawImage(theiaSvgTexture, compositeCanvas.width * 0.66, compositeCanvas.height * 0.08, compositeCanvas.width * 0.28, compositeCanvas.height * 0.52);
+        const baseWidth = Number(theiaSvgTexture.naturalWidth) || 300;
+        const baseHeight = Number(theiaSvgTexture.naturalHeight) || 300;
+        const maxWidth = compositeCanvas.width * 0.3;
+        const maxHeight = compositeCanvas.height * 0.6;
+        const scale = Math.min(maxWidth / baseWidth, maxHeight / baseHeight);
+        const drawWidth = baseWidth * scale;
+        const drawHeight = baseHeight * scale;
+        const drawX = (compositeCanvas.width - drawWidth) / 2;
+        const drawY = (compositeCanvas.height - drawHeight) / 2;
+        compositeContext.drawImage(theiaSvgTexture, drawX, drawY, drawWidth, drawHeight);
       }
     }, 33);
   };
@@ -646,10 +693,8 @@
             narrativeModeProvider,
             sourceVideoUrl,
           });
-          setStatus('YouTube source narration playback failed to start.');
-          throw error;
+          setStatus('YouTube source narration playback failed; falling back to Coqui TTS playback.');
         }
-        return;
       }
       if (!narrativeSourceVideo) {
         logger.error('Source narration provider requires the narrative source video element, but it is missing.', {
