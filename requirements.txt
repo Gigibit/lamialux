@@ -4,3 +4,4 @@ httpx==0.28.1
 ruff==0.9.10
 pypdf==5.4.0
 TTS==0.22.0
+youtube-transcript-api==1.2.3
