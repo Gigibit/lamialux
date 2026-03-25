@@ -54,7 +54,7 @@ const baseConfig = {
     PRESSURE: 0.8,
     SPLAT_FORCE: 6000,
     COLORFUL: true,
-    COLOR_UPDATE_SPEED: 10,
+    COLOR_UPDATE_SPEED: 16,
     PAUSED: false,
     BACK_COLOR: { r: 0, g: 0, b: 0 },
     TRANSPARENT: false,
@@ -1107,6 +1107,7 @@ let colorUpdateTimer = 0.0;
 let autoExplosionTimer = 0.0;
 // Imposta il primo intervallo casuale per l'esplosione (tra 5 e 15 secondi)
 let nextExplosionTime = 5.0 + Math.random() * 10.0;
+let colorWaveTime = 0.0;
 
 document.addEventListener('DOMContentLoaded', function() {
     updateKeywords();
@@ -1161,6 +1162,7 @@ function resizeCanvas() {
 function updateColors(dt) {
     if (!config.COLORFUL) return;
 
+    colorWaveTime += dt;
     colorUpdateTimer += dt * config.COLOR_UPDATE_SPEED;
     if (colorUpdateTimer >= 1) {
         colorUpdateTimer = wrap(colorUpdateTimer, 0, 1);
@@ -1516,7 +1518,7 @@ function startAutomatedDrag() {
     automatedPointer.startY = Math.random();
     automatedPointer.endX = Math.random();
     automatedPointer.endY = Math.random();
-    automatedPointer.duration = 2.0 + Math.random() * 5.0; // Durata tra 2 e 5 secondi
+    automatedPointer.duration = 1.6 + Math.random() * 3.2; // Durata tra 1.6 e 4.8 secondi
     automatedPointer.life = automatedPointer.duration;
     automatedPointer.progress = 0;
 
@@ -1538,8 +1540,8 @@ function updateAutomatedDrag(dt) {
     if (!automatedPointer.active && automatedDragTimer >= nextDragTime) {
         startAutomatedDrag();
         automatedDragTimer = 0;
-        // Prossimo drag tra 4 e 8 secondi
-        nextDragTime = 4.0 + Math.random() * 4.0; 
+        // Prossimo drag tra 2 e 4 secondi
+        nextDragTime = 2.0 + Math.random() * 2.0; 
     }
 
     // Se non c'è un drag attivo, esci
@@ -1569,8 +1571,8 @@ function updateAutomatedDrag(dt) {
     let currentY = automatedPointer.startY + (automatedPointer.endY - automatedPointer.startY) * easedProgress;
     
     // Aggiungi un po' di movimento ondulatorio per renderlo più organico
-    currentX += Math.sin(easedProgress * Math.PI * 4) * 0.05; // 4 oscillazioni complete
-    currentY += Math.cos(easedProgress * Math.PI * 4) * 0.05;
+    currentX += Math.sin(easedProgress * Math.PI * 6) * 0.08; // 6 oscillazioni complete
+    currentY += Math.cos(easedProgress * Math.PI * 6) * 0.08;
 
     // Simula il "touchmove": calcola la posizione corrente in pixel
     const currentPosX = currentX * canvas.width;
@@ -1693,15 +1695,12 @@ function correctDeltaY(delta) {
 }
 
 function generateColor() {
-    // Scegli una tonalità completamente a caso su tutto lo spettro dei colori (da 0.0 a 1.0).
-    const hue = Math.random();
-
-    // Il resto della funzione rimane invariato
-    let c = HSVtoRGB(hue, 1.0, 1.0); // Creates a color at max brightness
-    
-    // MODIFICA CHIAVE: Aumenta questo valore per colori molto più luminosi
-    const brightness = 0.1;  // VECCHIO VALORE: 0.08
-    
+    const baseHue = Math.random();
+    const waveHue = (Math.sin(colorWaveTime * 1.5) + 1) * 0.15;
+    const hue = wrap(baseHue + waveHue, 0, 1);
+    const saturation = 0.9 + Math.random() * 0.1;
+    let c = HSVtoRGB(hue, saturation, 1.0);
+    const brightness = 0.14 + Math.sin(colorWaveTime * 2.0) * 0.02;
     c.r *= brightness;
     c.g *= brightness;
     c.b *= brightness;
