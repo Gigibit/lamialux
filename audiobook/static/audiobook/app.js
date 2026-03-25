@@ -56,6 +56,11 @@
   let theiaSvgTexture = null;
   let theiaSvgTextureUrl = '';
   let theiaSvgAnimatorId = null;
+  let lipAudioContext = null;
+  let lipAudioAnalyser = null;
+  let lipAudioSourceNode = null;
+  let lipAudioData = null;
+  let lipAudioElement = null;
   let playbackToken = 0;
   let currentIndex = 0;
   let cancelled = false;
@@ -264,6 +269,69 @@
     }
   };
 
+  const getLipAudioIntensity = () => {
+    if (!lipAudioAnalyser || !lipAudioData) {
+      return 0;
+    }
+    lipAudioAnalyser.getByteFrequencyData(lipAudioData);
+    let energy = 0;
+    for (let index = 0; index < lipAudioData.length; index += 1) {
+      energy += lipAudioData[index];
+    }
+    const averageEnergy = energy / (lipAudioData.length || 1);
+    return Math.min(1, averageEnergy / 255);
+  };
+
+  const detachLipAudioInput = () => {
+    if (lipAudioSourceNode) {
+      try {
+        lipAudioSourceNode.disconnect();
+      } catch (error) {
+        logger.error('Failed to disconnect the existing Theia mouth audio input node.', { error });
+      }
+    }
+    lipAudioSourceNode = null;
+    lipAudioElement = null;
+  };
+
+  const connectLipAudioInput = (mediaElement) => {
+    if (!mediaElement) {
+      detachLipAudioInput();
+      return;
+    }
+    if (lipAudioElement === mediaElement && lipAudioAnalyser) {
+      return;
+    }
+    try {
+      if (!lipAudioContext) {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextClass) {
+          logger.error('Theia mouth audio input cannot be attached because AudioContext is unavailable.');
+          return;
+        }
+        lipAudioContext = new AudioContextClass();
+      }
+      if (!lipAudioAnalyser) {
+        lipAudioAnalyser = lipAudioContext.createAnalyser();
+        lipAudioAnalyser.fftSize = 512;
+        lipAudioAnalyser.smoothingTimeConstant = 0.82;
+        lipAudioData = new Uint8Array(lipAudioAnalyser.frequencyBinCount);
+      }
+      detachLipAudioInput();
+      lipAudioSourceNode = lipAudioContext.createMediaElementSource(mediaElement);
+      lipAudioSourceNode.connect(lipAudioAnalyser);
+      lipAudioAnalyser.connect(lipAudioContext.destination);
+      lipAudioElement = mediaElement;
+      if (lipAudioContext.state === 'suspended') {
+        void lipAudioContext.resume().catch((error) => {
+          logger.error('Theia mouth audio input resume failed.', { error });
+        });
+      }
+    } catch (error) {
+      logger.error('Theia mouth audio input connection failed.', { error });
+    }
+  };
+
   const updateTheiaLips = (timestampMs) => {
     if (!theiaFormSvg) {
       return;
@@ -276,14 +344,16 @@
       return;
     }
     const oscillation = (Math.sin(timestampMs / 220) + 1) / 2;
-    const width = 18 + (oscillation * 4);
-    const upperLift = 186 + (oscillation * 1.8);
-    const lowerDrop = 191 + (oscillation * 4.2);
+    const audioIntensity = getLipAudioIntensity();
+    const blend = Math.min(1, (oscillation * 0.55) + (audioIntensity * 0.9));
+    const width = 18 + (blend * 7.5);
+    const upperLift = 186 + (blend * 2.6);
+    const lowerDrop = 191 + (blend * 8);
     const cornerLeft = 150 - width;
     const cornerRight = 150 + width;
-    mouthUpper.setAttribute('d', `M${cornerLeft} 190 Q150 ${upperLift} ${cornerRight} 190 Q150 ${192 + (oscillation * 1.5)} ${cornerLeft} 190 Z`);
-    mouthLower.setAttribute('d', `M${cornerLeft} 190 Q150 ${lowerDrop} ${cornerRight} 190 Q150 ${191 + (oscillation * 2.6)} ${cornerLeft} 190 Z`);
-    mouthInside.setAttribute('d', `M${cornerLeft + 2} 190 Q150 ${189 + (oscillation * 4.3)} ${cornerRight - 2} 190 Q150 ${190 + (oscillation * 3.5)} ${cornerLeft + 2} 190 Z`);
+    mouthUpper.setAttribute('d', `M${cornerLeft} 190 Q150 ${upperLift} ${cornerRight} 190 Q150 ${192 + (blend * 1.5)} ${cornerLeft} 190 Z`);
+    mouthLower.setAttribute('d', `M${cornerLeft} 190 Q150 ${lowerDrop} ${cornerRight} 190 Q150 ${191 + (blend * 3.2)} ${cornerLeft} 190 Z`);
+    mouthInside.setAttribute('d', `M${cornerLeft + 2} 190 Q150 ${189 + (blend * 5.8)} ${cornerRight - 2} 190 Q150 ${190 + (blend * 4.5)} ${cornerLeft + 2} 190 Z`);
   };
 
   const startTheiaSvgAnimator = () => {
@@ -345,7 +415,6 @@
     stopCompositeFrameLoop();
     compositeFrameTimerId = window.setInterval(() => {
       compositeContext.clearRect(0, 0, compositeCanvas.width, compositeCanvas.height);
-      compositeContext.drawImage(animationCanvas, 0, 0, compositeCanvas.width, compositeCanvas.height);
       if (theiaSvgTexture && theiaSvgTexture.complete) {
         const baseWidth = Number(theiaSvgTexture.naturalWidth) || 300;
         const baseHeight = Number(theiaSvgTexture.naturalHeight) || 300;
@@ -358,6 +427,7 @@
         const drawY = (compositeCanvas.height - drawHeight) / 2;
         compositeContext.drawImage(theiaSvgTexture, drawX, drawY, drawWidth, drawHeight);
       }
+      compositeContext.drawImage(animationCanvas, 0, 0, compositeCanvas.width, compositeCanvas.height);
     }, 33);
   };
 
@@ -722,6 +792,7 @@
         setStatus('Playing source narration video...');
         setOverlay('LamiaLux source narration', 'Playback is using the upstream source video audio.');
         try {
+          connectLipAudioInput(narrativeSourceVideo);
           await narrativeSourceVideo.play();
         } catch (error) {
           logger.error('Source narration video playback failed to start.', {
@@ -745,6 +816,7 @@
       setStatus(`Reading chunk ${index + 1} of ${items.length} with Coqui TTS...`);
       setOverlay('LamiaLux live PDF reading', items[index].dataset.text || '');
       coquiPlayer.src = `/tts/coqui?sessionId=${encodeURIComponent(browserSessionId)}&chunkIndex=${index + 1}`;
+      connectLipAudioInput(coquiPlayer);
       try {
         await coquiPlayer.play();
       } catch (error) {
@@ -786,6 +858,7 @@
     setOverlay('LamiaLux visual music', `${musicTrack.title} · ${musicTrack.artist}`);
     musicPlayer.src = musicTrack.preview_url;
     musicPlayer.loop = true;
+    connectLipAudioInput(musicPlayer);
     try {
       await musicPlayer.play();
       await pushPromptUpdate(`${musicTrack.title} by ${musicTrack.artist}`);
@@ -808,6 +881,7 @@
     await stopMediaElement(musicPlayer);
     await stopMediaElement(narrativeSourceVideo);
     stopYouTubeSourceNarration();
+    detachLipAudioInput();
     stopCompositeFrameLoop();
     if (theiaSvgAnimatorId) {
       window.cancelAnimationFrame(theiaSvgAnimatorId);
