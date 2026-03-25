@@ -477,17 +477,19 @@
       logger.error('Theia form lip animation failed because one or more SVG mouth paths are missing.');
       return;
     }
-    const oscillation = (Math.sin(timestampMs / 130) + 1) / 2;
+    const oscillation = (Math.sin(timestampMs / 105) + 1) / 2;
     const audioIntensity = getLipAudioIntensity();
-    const blend = Math.min(1, (oscillation * 0.55) + (audioIntensity * 1.55));
-    const width = 16 + (blend * 17.5);
-    const upperLift = 189 + (blend * 3.2);
-    const lowerDrop = 193 + (blend * 23.5);
+    const speechPulse = Math.min(1, (audioIntensity * 1.9) + (oscillation * 0.45));
+    const jawDrop = Math.pow(speechPulse, 0.72);
+    const lipTension = 1 - (jawDrop * 0.7);
+    const width = 17 + (lipTension * 7.5);
+    const upperLift = 188 + (jawDrop * 4.8);
+    const lowerDrop = 195 + (jawDrop * 42);
     const cornerLeft = 150 - width;
     const cornerRight = 150 + width;
-    mouthUpper.setAttribute('d', `M${cornerLeft} 190 Q150 ${upperLift} ${cornerRight} 190 Q150 ${193 + (blend * 4.3)} ${cornerLeft} 190 Z`);
-    mouthLower.setAttribute('d', `M${cornerLeft} 190 Q150 ${lowerDrop} ${cornerRight} 190 Q150 ${193 + (blend * 13.2)} ${cornerLeft} 190 Z`);
-    mouthInside.setAttribute('d', `M${cornerLeft + 1} 190 Q150 ${189 + (blend * 20.5)} ${cornerRight - 1} 190 Q150 ${192 + (blend * 13.6)} ${cornerLeft + 1} 190 Z`);
+    mouthUpper.setAttribute('d', `M${cornerLeft} 190 Q150 ${upperLift} ${cornerRight} 190 Q150 ${193 + (jawDrop * 2.8)} ${cornerLeft} 190 Z`);
+    mouthLower.setAttribute('d', `M${cornerLeft} 190 Q150 ${lowerDrop} ${cornerRight} 190 Q150 ${194 + (jawDrop * 20.2)} ${cornerLeft} 190 Z`);
+    mouthInside.setAttribute('d', `M${cornerLeft + 1} 190 Q150 ${191 + (jawDrop * 32)} ${cornerRight - 1} 190 Q150 ${194 + (jawDrop * 21.8)} ${cornerLeft + 1} 190 Z`);
   };
 
   const startTheiaSvgAnimator = () => {
