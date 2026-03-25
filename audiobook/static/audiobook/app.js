@@ -290,11 +290,17 @@
     }
 
     if (!response.ok) {
+      const errorPayload = await response.json().catch(() => null);
+      const backendErrorMessage = String((errorPayload && errorPayload.error) || '').trim();
+      const backendErrorDetails = errorPayload && typeof errorPayload === 'object' ? errorPayload.details : null;
       logger.error('Spotify Web Playback SDK token request failed with non-2xx status.', {
         status: response.status,
         spotifyPlaybackTokenEndpoint,
+        backendErrorMessage,
+        backendErrorDetails,
       });
-      throw new Error(`Spotify token request failed with status ${response.status}.`);
+      const fallbackMessage = `Spotify token request failed with status ${response.status}.`;
+      throw new Error(backendErrorMessage || fallbackMessage);
     }
 
     const payload = await response.json().catch((error) => {
