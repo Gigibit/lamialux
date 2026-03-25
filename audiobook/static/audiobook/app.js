@@ -45,10 +45,6 @@
   let compositeStream = null;
   let connectPromise = null;
   let streamReady = false;
-  let audioContext = null;
-  let destination = null;
-  let gainNode = null;
-  let sourceNode = null;
   let promptUpdateTimerId = null;
   let playbackToken = 0;
   let currentIndex = 0;
@@ -166,49 +162,10 @@
     }
   };
 
-  const ensureAudioGraph = () => {
-    if (!audioContext) {
-      audioContext = new window.AudioContext();
-      destination = audioContext.createMediaStreamDestination();
-      gainNode = audioContext.createGain();
-      gainNode.gain.value = 1;
-      gainNode.connect(destination);
-    }
-    return { audioContext, destination, gainNode };
-  };
-
-  const disconnectSourceNode = () => {
-    if (sourceNode) {
-      try {
-        sourceNode.disconnect();
-      } catch (error) {
-        logger.error('Audio source disconnect failed.', error);
-      }
-      sourceNode = null;
-    }
-  };
-
-  const bindAudioElementToGraph = (element) => {
-    const graph = ensureAudioGraph();
-    disconnectSourceNode();
-    sourceNode = graph.audioContext.createMediaElementSource(element);
-    sourceNode.connect(graph.gainNode);
-    graph.gainNode.connect(graph.audioContext.destination);
-    return graph.destination.stream;
-  };
-
   const prepareCompositeStream = async () => {
     setOverlay('LamiaLux live canvas', page === 'music' ? 'Visual music canvas ready for WHIP publishing.' : 'Theia canvas capture ready for WHIP publishing.');
     const canvasStream = animationCanvas.captureStream(30);
-    let audioStream = null;
-    if (page === 'music' && musicPlayer) {
-      audioStream = bindAudioElementToGraph(musicPlayer);
-    } else if (page === 'book' && isSourceNarrationProvider && narrativeSourceVideo) {
-      audioStream = bindAudioElementToGraph(narrativeSourceVideo);
-    } else if (page === 'book' && coquiPlayer) {
-      audioStream = bindAudioElementToGraph(coquiPlayer);
-    }
-    compositeStream = new MediaStream([...canvasStream.getVideoTracks(), ...(audioStream ? audioStream.getAudioTracks() : [])]);
+    compositeStream = new MediaStream([...canvasStream.getVideoTracks()]);
     return compositeStream;
   };
 
