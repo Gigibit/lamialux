@@ -101,7 +101,7 @@
             preload="metadata"
             playsinline
             crossorigin="anonymous"
-            {% if stream and stream.source_video_url %}src="{{ stream.source_video_url }}"{% endif %}
+            {% if stream and stream.source_video_url and narrative_mode_provider != 'YOUTUBE_SEARCH' %}src="{{ stream.source_video_url }}"{% endif %}
             {% if not stream or not stream.source_video_url or narrative_mode_provider == 'YOUTUBE_SEARCH' %}hidden{% endif %}
           ></video>
           <audio id="coqui-player" preload="none" hidden></audio>

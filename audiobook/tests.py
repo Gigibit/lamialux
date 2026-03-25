@@ -105,6 +105,53 @@ class HomeViewTests(TestCase):
         self.assertContains(response, "window.lamialuxPageConfig")
         self.assertEqual(STREAM_SESSIONS["browser-uuid"].whip_url, "https://video.example/whip")
 
+    @patch("audiobook.views.DaydreamClient.create_livepeer_stream_session")
+    @patch("audiobook.views.NarrativeClientFactory.create")
+    def test_youtube_mode_hides_narrative_source_video_src(
+        self,
+        create_client,
+        create_livepeer_stream_session,
+    ) -> None:
+        create_client.return_value.build_experience.return_value = type(
+            "Experience",
+            (),
+            {
+                "title": "Video source",
+                "author": "YouTube",
+                "pdf_url": "https://www.youtube.com/watch?v=DfK0b66vq8E",
+                "storage_path": "youtube-search-api",
+                "chunks": [
+                    NarrativeChunk(
+                        chapter_title="Audiobook source",
+                        chunk_index=1,
+                        text="Video summary.",
+                    )
+                ],
+                "source_video_url": "https://www.youtube.com/watch?v=DfK0b66vq8E",
+            },
+        )()
+        create_livepeer_stream_session.return_value = StreamSession(
+            session_id="livepeer-youtube",
+            whip_url="https://video.example/whip",
+            whep_url="https://video.example/whep",
+            output_video_url="https://video.example/whep",
+            upstream_stream_id="livepeer-youtube",
+        )
+
+        with patch.dict("os.environ", {"NARRATIVE_MODE_PROVIDER": "YOUTUBE_SEARCH"}):
+            response = self.client.post(
+                "/",
+                {
+                    "book_query": "Dune",
+                    "daydream_prompt": "desert storm",
+                    "browser_session_id": "browser-youtube",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'id="narrative-source-video"')
+        self.assertNotContains(response, 'src="https://www.youtube.com/watch?v=DfK0b66vq8E"')
+
     @patch("audiobook.views.MusicSearchClient.search_track")
     @patch("audiobook.views.DaydreamClient.create_livepeer_stream_session")
     def test_start_music_stream_success(self, create_livepeer_stream_session, search_track) -> None:
