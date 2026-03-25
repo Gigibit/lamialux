@@ -44,7 +44,6 @@ class HomeViewTests(TestCase):
         self.assertContains(response, 'Search track and prepare stream')
         self.assertContains(response, 'id="music-player" preload="none"')
         self.assertContains(response, 'id="theia-canvas"')
-        self.assertContains(response, 'id="theia-canvas-overlay"')
         self.assertNotContains(response, 'id="narration-canvas"')
         self.assertContains(response, "Canvas preview")
         self.assertContains(

@@ -7,7 +7,6 @@
   const fullscreenButton = document.getElementById('fullscreen-output');
   const statusEl = document.getElementById('stream-status');
   const animationCanvas = document.getElementById('theia-canvas');
-  const animationOverlay = document.getElementById('theia-canvas-overlay');
   const theiaFormSvg = document.getElementById('theia-form-deeper');
   const video = document.getElementById('whep-player');
   const coquiPlayer = document.getElementById('coqui-player');
@@ -23,7 +22,7 @@
   const STORY_PROMPT_DELTA_SECONDS = Number(config.updateStoryPromptDeltaSeconds || 10);
   const logger = window.logger && typeof window.logger.error === 'function' ? window.logger : console;
 
-  if (!playButton || !stopButton || !statusEl || !animationCanvas || !animationOverlay || !video || !sessionLabel) {
+  if (!playButton || !stopButton || !statusEl || !animationCanvas || !video || !sessionLabel) {
     return;
   }
 
@@ -76,16 +75,7 @@
 
   const setStatus = (message) => { statusEl.textContent = message; };
   const setOverlay = (title, text) => {
-    if (!animationOverlay) {
-      logger.error('Unable to update the Theia canvas overlay because the overlay element is missing.');
-      return;
-    }
-    animationOverlay.innerHTML = '';
-    const titleEl = document.createElement('strong');
-    titleEl.textContent = title;
-    const body = document.createElement('span');
-    body.textContent = text;
-    animationOverlay.append(titleEl, body);
+    setStatus(`${title} — ${text}`);
   };
   const chooseRandomPromptSentence = () => sentencePool.length
     ? sentencePool[Math.floor(Math.random() * sentencePool.length)]
