@@ -9,6 +9,8 @@
   const movieForwardButton = document.getElementById('movie-forward');
   const moviePromptInput = document.getElementById('movie-daydream-prompt-update');
   const moviePromptSubmitButton = document.getElementById('movie-daydream-prompt-submit');
+  const movieSeekInput = document.getElementById('movie-seek');
+  const movieTimerEl = document.getElementById('movie-timer');
   const statusEl = document.getElementById('stream-status');
   const animationCanvas = document.getElementById('theia-canvas');
   const theiaFormSvg = document.getElementById('theia-form-deeper');
@@ -73,6 +75,7 @@
   let lipAxisMixBias = 0.5;
   let playbackToken = 0;
   let currentIndex = 0;
+  let isSeekingMovieTimeline = false;
   let cancelled = false;
   let youtubePlayer = null;
   let youtubePlayerReadyPromise = null;
@@ -1276,26 +1279,71 @@
     }
   };
 
-  const seekMovie = (deltaSeconds) => {
+  const formatMediaTime = (seconds) => {
+    if (!Number.isFinite(seconds) || seconds < 0) {
+      return '00:00';
+    }
+    const totalSeconds = Math.floor(seconds);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const secs = totalSeconds % 60;
+    if (hours > 0) {
+      return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    }
+    return `${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  };
+
+  const renderMovieTimeline = () => {
+    if (page !== 'movie') {
+      return;
+    }
+    const duration = Number.isFinite(movieSourcePlayer && movieSourcePlayer.duration) ? movieSourcePlayer.duration : 0;
+    const currentTime = Number.isFinite(movieSourcePlayer && movieSourcePlayer.currentTime) ? movieSourcePlayer.currentTime : 0;
+    if (movieTimerEl) {
+      movieTimerEl.textContent = `${formatMediaTime(currentTime)} / ${formatMediaTime(duration)}`;
+    }
+    if (!movieSeekInput || isSeekingMovieTimeline) {
+      return;
+    }
+    const safeDuration = duration > 0 ? duration : 1;
+    const progressPercent = Math.max(0, Math.min(100, (currentTime / safeDuration) * 100));
+    movieSeekInput.value = String(currentTime);
+    movieSeekInput.max = String(safeDuration);
+    movieSeekInput.style.setProperty('--seek-progress', `${progressPercent}%`);
+  };
+
+  const seekMovieToTime = (targetTimeSeconds, { fromCursor = false } = {}) => {
     if (page !== 'movie') {
       return;
     }
     if (!movieSourcePlayer) {
-      logger.error('Movie seek requested but the movie source player element is missing.', { deltaSeconds });
+      logger.error('Movie seek requested but the movie source player element is missing.', { targetTimeSeconds, fromCursor });
       setStatus('Movie seek is unavailable because the source player is missing.');
       return;
     }
     if (!Number.isFinite(movieSourcePlayer.duration) || movieSourcePlayer.duration <= 0) {
       logger.error('Movie seek requested before media metadata was available.', {
-        deltaSeconds,
+        targetTimeSeconds,
+        fromCursor,
         duration: movieSourcePlayer.duration,
       });
       setStatus('Movie metadata is not ready yet. Start playback first.');
       return;
     }
-    const targetTime = Math.max(0, Math.min(movieSourcePlayer.duration, movieSourcePlayer.currentTime + deltaSeconds));
+    const targetTime = Math.max(0, Math.min(movieSourcePlayer.duration, targetTimeSeconds));
     movieSourcePlayer.currentTime = targetTime;
-    setStatus(`Moved movie to ${Math.round(targetTime)}s.`);
+    renderMovieTimeline();
+    setStatus(fromCursor ? `Timeline cursor moved to ${formatMediaTime(targetTime)}.` : `Moved movie to ${formatMediaTime(targetTime)}.`);
+  };
+
+  const seekMovie = (deltaSeconds) => {
+    if (!movieSourcePlayer) {
+      logger.error('Movie step seek failed because the movie source player element is missing.', { deltaSeconds });
+      setStatus('Movie seek is unavailable because the source player is missing.');
+      return;
+    }
+    const currentTime = Number.isFinite(movieSourcePlayer.currentTime) ? movieSourcePlayer.currentTime : 0;
+    seekMovieToTime(currentTime + deltaSeconds);
   };
 
   const submitMoviePromptUpdate = async () => {
@@ -1425,6 +1473,40 @@
   if (movieForwardButton) {
     movieForwardButton.addEventListener('click', () => { seekMovie(10); });
   }
+  if (movieSourcePlayer && page === 'movie') {
+    movieSourcePlayer.addEventListener('loadedmetadata', () => {
+      renderMovieTimeline();
+    });
+    movieSourcePlayer.addEventListener('timeupdate', () => {
+      renderMovieTimeline();
+    });
+    movieSourcePlayer.addEventListener('durationchange', () => {
+      renderMovieTimeline();
+    });
+  }
+  if (movieSeekInput) {
+    movieSeekInput.addEventListener('pointerdown', () => {
+      isSeekingMovieTimeline = true;
+    });
+    movieSeekInput.addEventListener('pointerup', () => {
+      isSeekingMovieTimeline = false;
+      seekMovieToTime(Number(movieSeekInput.value), { fromCursor: true });
+    });
+    movieSeekInput.addEventListener('input', () => {
+      const scrubTime = Number(movieSeekInput.value);
+      const duration = Number.isFinite(movieSourcePlayer && movieSourcePlayer.duration) ? movieSourcePlayer.duration : 0;
+      const safeDuration = duration > 0 ? duration : Number(movieSeekInput.max || 1);
+      const progressPercent = Math.max(0, Math.min(100, (scrubTime / safeDuration) * 100));
+      movieSeekInput.style.setProperty('--seek-progress', `${progressPercent}%`);
+      if (movieTimerEl) {
+        movieTimerEl.textContent = `${formatMediaTime(scrubTime)} / ${formatMediaTime(duration)}`;
+      }
+    });
+    movieSeekInput.addEventListener('change', () => {
+      isSeekingMovieTimeline = false;
+      seekMovieToTime(Number(movieSeekInput.value), { fromCursor: true });
+    });
+  }
   if (moviePromptInput && !moviePromptInput.value && initialPrompt) {
     moviePromptInput.value = initialPrompt;
   }
@@ -1443,6 +1525,7 @@
   }
 
   prepareNarrativeSourceVideo();
+  renderMovieTimeline();
   setOverlay('LamiaLux ready', page === 'music' ? 'Search a track to prepare the visual music canvas.' : (page === 'movie' ? 'Upload an MP4 to stream the movie directly over WHIP/WHEP.' : 'Search, download, and read to start the book canvas.'));
   maybeAutoReadBook();
 })();
