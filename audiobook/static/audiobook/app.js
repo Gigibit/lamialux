@@ -1314,12 +1314,31 @@
     return `${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
   };
 
+  const canSeekMediaElement = (element) => (
+    !!element
+    && Number.isFinite(element.duration)
+    && element.duration > 0
+    && element.seekable
+    && element.seekable.length > 0
+  );
+
+  const getMovieTimelineSource = () => {
+    if (canSeekMediaElement(video)) {
+      return video;
+    }
+    if (canSeekMediaElement(movieSourcePlayer)) {
+      return movieSourcePlayer;
+    }
+    return movieSourcePlayer || video || null;
+  };
+
   const renderMovieTimeline = () => {
     if (page !== 'movie') {
       return;
     }
-    const duration = Number.isFinite(movieSourcePlayer && movieSourcePlayer.duration) ? movieSourcePlayer.duration : 0;
-    const currentTime = Number.isFinite(movieSourcePlayer && movieSourcePlayer.currentTime) ? movieSourcePlayer.currentTime : 0;
+    const timelineSource = getMovieTimelineSource();
+    const duration = Number.isFinite(timelineSource && timelineSource.duration) ? timelineSource.duration : 0;
+    const currentTime = Number.isFinite(timelineSource && timelineSource.currentTime) ? timelineSource.currentTime : 0;
     if (movieTimerEl) {
       movieTimerEl.textContent = `${formatMediaTime(currentTime)} / ${formatMediaTime(duration)}`;
     }
@@ -1337,33 +1356,36 @@
     if (page !== 'movie') {
       return;
     }
-    if (!movieSourcePlayer) {
-      logger.error('Movie seek requested but the movie source player element is missing.', { targetTimeSeconds, fromCursor });
-      setStatus('Movie seek is unavailable because the source player is missing.');
+    const timelineSource = getMovieTimelineSource();
+    if (!timelineSource) {
+      logger.error('Movie seek requested but no seekable movie timeline source is available.', { targetTimeSeconds, fromCursor });
+      setStatus('Movie seek is unavailable because the timeline source is missing.');
       return;
     }
-    if (!Number.isFinite(movieSourcePlayer.duration) || movieSourcePlayer.duration <= 0) {
-      logger.error('Movie seek requested before media metadata was available.', {
+    if (!canSeekMediaElement(timelineSource)) {
+      logger.error('Movie seek requested before a seekable timeline source was ready.', {
         targetTimeSeconds,
         fromCursor,
-        duration: movieSourcePlayer.duration,
+        duration: timelineSource.duration,
+        timelineSourceId: timelineSource.id || 'unknown',
       });
-      setStatus('Movie metadata is not ready yet. Start playback first.');
+      setStatus('Movie timeline is not seekable yet. Start playback and try again.');
       return;
     }
-    const targetTime = Math.max(0, Math.min(movieSourcePlayer.duration, targetTimeSeconds));
-    movieSourcePlayer.currentTime = targetTime;
+    const targetTime = Math.max(0, Math.min(timelineSource.duration, targetTimeSeconds));
+    timelineSource.currentTime = targetTime;
     renderMovieTimeline();
     setStatus(fromCursor ? `Timeline cursor moved to ${formatMediaTime(targetTime)}.` : `Moved movie to ${formatMediaTime(targetTime)}.`);
   };
 
   const seekMovie = (deltaSeconds) => {
-    if (!movieSourcePlayer) {
-      logger.error('Movie step seek failed because the movie source player element is missing.', { deltaSeconds });
-      setStatus('Movie seek is unavailable because the source player is missing.');
+    const timelineSource = getMovieTimelineSource();
+    if (!timelineSource) {
+      logger.error('Movie step seek failed because no movie timeline source is available.', { deltaSeconds });
+      setStatus('Movie seek is unavailable because no timeline source is available.');
       return;
     }
-    const currentTime = Number.isFinite(movieSourcePlayer.currentTime) ? movieSourcePlayer.currentTime : 0;
+    const currentTime = Number.isFinite(timelineSource.currentTime) ? timelineSource.currentTime : 0;
     seekMovieToTime(currentTime + deltaSeconds);
   };
 
@@ -1505,6 +1527,17 @@
       renderMovieTimeline();
     });
   }
+  if (video && page === 'movie') {
+    video.addEventListener('loadedmetadata', () => {
+      renderMovieTimeline();
+    });
+    video.addEventListener('timeupdate', () => {
+      renderMovieTimeline();
+    });
+    video.addEventListener('durationchange', () => {
+      renderMovieTimeline();
+    });
+  }
   if (movieSeekInput) {
     movieSeekInput.addEventListener('pointerdown', () => {
       isSeekingMovieTimeline = true;
@@ -1515,7 +1548,8 @@
     });
     movieSeekInput.addEventListener('input', () => {
       const scrubTime = Number(movieSeekInput.value);
-      const duration = Number.isFinite(movieSourcePlayer && movieSourcePlayer.duration) ? movieSourcePlayer.duration : 0;
+      const timelineSource = getMovieTimelineSource();
+      const duration = Number.isFinite(timelineSource && timelineSource.duration) ? timelineSource.duration : 0;
       const safeDuration = duration > 0 ? duration : Number(movieSeekInput.max || 1);
       const progressPercent = Math.max(0, Math.min(100, (scrubTime / safeDuration) * 100));
       movieSeekInput.style.setProperty('--seek-progress', `${progressPercent}%`);
