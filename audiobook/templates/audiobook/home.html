@@ -211,6 +211,25 @@
             </div>
             {% endif %}
           </div>
+          {% if page == 'movie' %}
+            <div class="movie-controller panel-subsection" id="movie-controller">
+              <div class="movie-controller__header">
+                <p class="eyebrow">Smart movie controls</p>
+                <p class="small" id="movie-timer">00:00 / 00:00</p>
+              </div>
+              <input
+                id="movie-seek"
+                class="movie-controller__seek"
+                type="range"
+                min="0"
+                max="1000"
+                step="0.1"
+                value="0"
+                aria-label="Movie timeline cursor"
+                {% if not stream %}disabled{% endif %}
+              />
+            </div>
+          {% endif %}
           <div class="console-actions">
             {% if page == 'music' %}
               <button type="button" id="play-media" class="control-icon-button" aria-label="Play track" title="Play track" {% if not music_track %}disabled{% endif %}><span aria-hidden="true">▶</span></button>
@@ -223,25 +242,6 @@
             <button type="button" id="stop-media" class="secondary control-icon-button" aria-label="Stop playback" title="Stop playback"><span aria-hidden="true">⏹</span></button>
           </div>
           {% if page == 'movie' %}
-            <div class="movie-controller panel-subsection" id="movie-controller">
-              <div class="movie-controller__header">
-                <p class="eyebrow">Smart movie controls</p>
-                <p class="small" id="movie-timer">00:00 / 00:00</p>
-              </div>
-              <label for="movie-seek" class="movie-controller__seek-label">
-                <span class="small">Timeline cursor</span>
-                <input
-                  id="movie-seek"
-                  class="movie-controller__seek"
-                  type="range"
-                  min="0"
-                  max="1000"
-                  step="0.1"
-                  value="0"
-                  {% if not stream %}disabled{% endif %}
-                />
-              </label>
-            </div>
             <div class="panel-subsection movie-prompt-controls">
               <span class="small">Daydream prompt update</span>
               <input

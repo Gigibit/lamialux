@@ -158,6 +158,7 @@ button:disabled {
   gap: 12px;
   margin-top: 16px;
   flex-wrap: wrap;
+  justify-content: center;
 }
 
 .console-actions button {
@@ -187,6 +188,7 @@ button:disabled {
   gap: 10px;
   background: linear-gradient(120deg, rgba(37, 99, 235, 0.08), rgba(96, 165, 250, 0.18));
   border-color: rgba(37, 99, 235, 0.22);
+  width: 100%;
 }
 .movie-controller__header {
   display: flex;
@@ -197,11 +199,8 @@ button:disabled {
 .movie-controller__header .eyebrow {
   margin: 0;
 }
-.movie-controller__seek-label {
-  display: grid;
-  gap: 8px;
-}
 .movie-controller__seek {
+  width: 100%;
   appearance: none;
   height: 8px;
   border-radius: 999px;

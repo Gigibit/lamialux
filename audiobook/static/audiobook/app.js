@@ -29,6 +29,15 @@
   const PROMPT_UPDATE_INTERVAL_MS = 5000;
   const STORY_PROMPT_DELTA_SECONDS = Number(config.updateStoryPromptDeltaSeconds || 10);
   const logger = window.logger && typeof window.logger.error === 'function' ? window.logger : console;
+  const logFrontend = (...args) => {
+    if (typeof logger.info === 'function') {
+      logger.info(...args);
+      return;
+    }
+    if (typeof logger.log === 'function') {
+      logger.log(...args);
+    }
+  };
 
   if (!stopButton || !video || !sessionLabel) {
     return;
@@ -1323,13 +1332,35 @@
   );
 
   const getMovieTimelineSource = () => {
-    if (canSeekMediaElement(video)) {
-      return video;
+    const preferredSources = [movieSourcePlayer, video];
+    for (const source of preferredSources) {
+      if (canSeekMediaElement(source)) {
+        return source;
+      }
     }
-    if (canSeekMediaElement(movieSourcePlayer)) {
-      return movieSourcePlayer;
+    for (const source of preferredSources) {
+      if (source && Number.isFinite(source.duration) && source.duration > 0) {
+        return source;
+      }
     }
     return movieSourcePlayer || video || null;
+  };
+
+  const syncMovieTimelinePeers = (targetTimeSeconds, sourceElement) => {
+    [movieSourcePlayer, video].forEach((element) => {
+      if (!element || element === sourceElement || !Number.isFinite(element.duration) || element.duration <= 0) {
+        return;
+      }
+      try {
+        element.currentTime = Math.max(0, Math.min(element.duration, targetTimeSeconds));
+      } catch (error) {
+        logger.error('Movie timeline sync failed for a secondary media element.', {
+          error,
+          elementId: element.id || 'unknown',
+          targetTimeSeconds,
+        });
+      }
+    });
   };
 
   const renderMovieTimeline = () => {
@@ -1373,9 +1404,25 @@
       return;
     }
     const targetTime = Math.max(0, Math.min(timelineSource.duration, targetTimeSeconds));
-    timelineSource.currentTime = targetTime;
-    renderMovieTimeline();
-    setStatus(fromCursor ? `Timeline cursor moved to ${formatMediaTime(targetTime)}.` : `Moved movie to ${formatMediaTime(targetTime)}.`);
+    try {
+      timelineSource.currentTime = targetTime;
+      syncMovieTimelinePeers(targetTime, timelineSource);
+      logFrontend('Movie timeline seek completed.', {
+        fromCursor,
+        targetTime,
+        timelineSourceId: timelineSource.id || 'unknown',
+      });
+      renderMovieTimeline();
+      setStatus(fromCursor ? `Timeline cursor moved to ${formatMediaTime(targetTime)}.` : `Moved movie to ${formatMediaTime(targetTime)}.`);
+    } catch (error) {
+      logger.error('Movie timeline seek failed while setting currentTime.', {
+        error,
+        fromCursor,
+        targetTime,
+        timelineSourceId: timelineSource.id || 'unknown',
+      });
+      setStatus('Movie timeline seek failed. Check frontend logs for details.');
+    }
   };
 
   const seekMovie = (deltaSeconds) => {
@@ -1541,10 +1588,16 @@
   if (movieSeekInput) {
     movieSeekInput.addEventListener('pointerdown', () => {
       isSeekingMovieTimeline = true;
+      logFrontend('Movie timeline pointer drag started.', { value: Number(movieSeekInput.value) });
     });
     movieSeekInput.addEventListener('pointerup', () => {
       isSeekingMovieTimeline = false;
+      logFrontend('Movie timeline pointer drag ended.', { value: Number(movieSeekInput.value) });
       seekMovieToTime(Number(movieSeekInput.value), { fromCursor: true });
+    });
+    movieSeekInput.addEventListener('pointercancel', () => {
+      isSeekingMovieTimeline = false;
+      logger.error('Movie timeline pointer interaction was canceled by the browser.', { value: Number(movieSeekInput.value) });
     });
     movieSeekInput.addEventListener('input', () => {
       const scrubTime = Number(movieSeekInput.value);
@@ -1556,9 +1609,15 @@
       if (movieTimerEl) {
         movieTimerEl.textContent = `${formatMediaTime(scrubTime)} / ${formatMediaTime(duration)}`;
       }
+      logFrontend('Movie timeline scrub updated.', {
+        scrubTime,
+        duration,
+        timelineSourceId: timelineSource && timelineSource.id ? timelineSource.id : 'unknown',
+      });
     });
     movieSeekInput.addEventListener('change', () => {
       isSeekingMovieTimeline = false;
+      logFrontend('Movie timeline change committed.', { value: Number(movieSeekInput.value) });
       seekMovieToTime(Number(movieSeekInput.value), { fromCursor: true });
     });
   }
