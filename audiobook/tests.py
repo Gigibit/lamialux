@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -35,6 +36,21 @@ class HomeViewTests(TestCase):
         self.assertNotContains(response, 'controls autoplay')
         self.assertNotContains(response, 'id="play-media"')
         self.assertContains(response, 'class="page-flip-card" id="page-flip-card"')
+        self.assertContains(response, "narratorEnabled: false")
+
+    def test_home_sets_narrator_enabled_from_env(self) -> None:
+        previous_value = os.environ.get("NARRATOR_ENABLED")
+        os.environ["NARRATOR_ENABLED"] = "true"
+        try:
+            response = self.client.get("/")
+        finally:
+            if previous_value is None:
+                os.environ.pop("NARRATOR_ENABLED", None)
+            else:
+                os.environ["NARRATOR_ENABLED"] = previous_value
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "narratorEnabled: true")
 
     def test_music_page_renders(self) -> None:
         response = self.client.get("/music")

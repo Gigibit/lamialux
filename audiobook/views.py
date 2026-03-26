@@ -148,9 +148,11 @@ def _page_context(page: str) -> dict[str, object]:
         .strip()
         .upper()
     )
+    narrator_enabled = str(os.getenv("NARRATOR_ENABLED", "false")).strip().lower() == "true"
     return {
         "page": page,
         "narrative_mode_provider": narrative_mode_provider,
+        "narrator_enabled": narrator_enabled,
         "update_story_prompt_delta_seconds": int(
             float(os.getenv("UPDATE_STORY_PROMPT_DELTA_SECONDS", "10"))
         ),

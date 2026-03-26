@@ -324,6 +324,7 @@
       window.lamialuxPageConfig = {
         page: "{{ page }}",
         hasPreparedStream: {{ stream|yesno:'true,false' }},
+        narratorEnabled: {{ narrator_enabled|yesno:'true,false' }},
         narrativeModeProvider: "{{ narrative_mode_provider|default:'' }}",
         sourceVideoUrl: "{{ stream.source_video_url|default:''|escapejs }}",
         updateStoryPromptDeltaSeconds: {{ update_story_prompt_delta_seconds|default:10 }},
