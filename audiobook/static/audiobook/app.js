@@ -1383,7 +1383,7 @@
     movieSeekInput.style.setProperty('--seek-progress', `${progressPercent}%`);
   };
 
-  const seekMovieToTime = (targetTimeSeconds, { fromCursor = false } = {}) => {
+  const seekMovieToTime = (targetTimeSeconds, { fromCursor = false, suppressStatus = false } = {}) => {
     if (page !== 'movie') {
       return;
     }
@@ -1413,7 +1413,9 @@
         timelineSourceId: timelineSource.id || 'unknown',
       });
       renderMovieTimeline();
-      setStatus(fromCursor ? `Timeline cursor moved to ${formatMediaTime(targetTime)}.` : `Moved movie to ${formatMediaTime(targetTime)}.`);
+      if (!suppressStatus) {
+        setStatus(fromCursor ? `Timeline cursor moved to ${formatMediaTime(targetTime)}.` : `Moved movie to ${formatMediaTime(targetTime)}.`);
+      }
     } catch (error) {
       logger.error('Movie timeline seek failed while setting currentTime.', {
         error,
@@ -1588,11 +1590,11 @@
   if (movieSeekInput) {
     movieSeekInput.addEventListener('pointerdown', () => {
       isSeekingMovieTimeline = true;
-      logFrontend('Movie timeline pointer drag started.', { value: Number(movieSeekInput.value) });
+      logger.error('Movie timeline pointer drag started.', { value: Number(movieSeekInput.value) });
     });
     movieSeekInput.addEventListener('pointerup', () => {
       isSeekingMovieTimeline = false;
-      logFrontend('Movie timeline pointer drag ended.', { value: Number(movieSeekInput.value) });
+      logger.error('Movie timeline pointer drag ended.', { value: Number(movieSeekInput.value) });
       seekMovieToTime(Number(movieSeekInput.value), { fromCursor: true });
     });
     movieSeekInput.addEventListener('pointercancel', () => {
@@ -1609,15 +1611,16 @@
       if (movieTimerEl) {
         movieTimerEl.textContent = `${formatMediaTime(scrubTime)} / ${formatMediaTime(duration)}`;
       }
-      logFrontend('Movie timeline scrub updated.', {
+      logger.error('Movie timeline scrub updated.', {
         scrubTime,
         duration,
         timelineSourceId: timelineSource && timelineSource.id ? timelineSource.id : 'unknown',
       });
+      seekMovieToTime(scrubTime, { fromCursor: true, suppressStatus: true });
     });
     movieSeekInput.addEventListener('change', () => {
       isSeekingMovieTimeline = false;
-      logFrontend('Movie timeline change committed.', { value: Number(movieSeekInput.value) });
+      logger.error('Movie timeline change committed.', { value: Number(movieSeekInput.value) });
       seekMovieToTime(Number(movieSeekInput.value), { fromCursor: true });
     });
   }
