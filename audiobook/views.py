@@ -82,6 +82,30 @@ def _request_debug_context(request: HttpRequest) -> dict[str, object]:
     }
 
 
+def _is_debug_logging_enabled() -> bool:
+    return logger.isEnabledFor(logging.DEBUG) or (
+        os.getenv("LOG_LEVEL", "").strip().upper() == "DEBUG"
+    )
+
+
+def _log_request_body_debug(request: HttpRequest, *, endpoint: str) -> None:
+    if not _is_debug_logging_enabled():
+        return
+    body_text = request.body.decode("utf-8", errors="replace")
+    logger.debug("Incoming request body for %s: %s", endpoint, body_text[:2000])
+
+
+def _log_response_body_debug(*, endpoint: str, response: httpx.Response) -> None:
+    if not _is_debug_logging_enabled():
+        return
+    logger.debug(
+        "Upstream response body for %s: status=%s body=%s",
+        endpoint,
+        response.status_code,
+        response.text[:2000],
+    )
+
+
 def _is_valid_spotify_redirect_uri(redirect_uri: str) -> bool:
     parsed = urlparse(redirect_uri)
     if parsed.scheme == "https" and parsed.netloc:
@@ -220,6 +244,7 @@ def stream_session(request: HttpRequest, session_id: str) -> JsonResponse:
 @csrf_exempt
 @require_POST
 def stream_match(request: HttpRequest) -> JsonResponse:
+    _log_request_body_debug(request, endpoint="stream_match")
     try:
         payload = json.loads(request.body.decode("utf-8") or "{}")
     except json.JSONDecodeError as exc:
@@ -272,6 +297,7 @@ def whip_proxy(request: HttpRequest, session_id: str) -> HttpResponse:
         return HttpResponse("WHIP session not found.", status=404)
 
     request_context = _request_debug_context(request)
+    _log_request_body_debug(request, endpoint="whip_proxy")
     logger.info(
         "Forwarding WHIP request for session %s with context=%s",
         session_id,
@@ -285,6 +311,7 @@ def whip_proxy(request: HttpRequest, session_id: str) -> HttpResponse:
                 headers={"Content-Type": request.headers.get("Content-Type", "application/sdp")},
                 content=request.body,
             )
+            _log_response_body_debug(endpoint="whip_proxy", response=upstream)
     except httpx.HTTPError as exc:
         logger.error(
             "WHIP proxy failed for session '%s': %s. request_context=%s upstream_url=%s",
@@ -404,6 +431,7 @@ def _proxy_whep_request(request: HttpRequest, session_id: str, method: str) -> H
     stream = STREAM_SESSIONS[session_id]
     upstream_url = _whep_upstream_url(stream, method)
     request_context = _request_debug_context(request)
+    _log_request_body_debug(request, endpoint="whep_proxy")
     logger.info(
         "Forwarding WHEP request for session %s using method %s "
         "with request_context=%s upstream_url=%s",
@@ -435,6 +463,7 @@ def _proxy_whep_request(request: HttpRequest, session_id: str, method: str) -> H
                 },
                 content=request.body,
             )
+            _log_response_body_debug(endpoint="whep_proxy", response=upstream)
     except httpx.HTTPError as exc:
         logger.error(
             "WHEP proxy failed for session '%s' using method %s against upstream %s: %s. "
@@ -699,6 +728,7 @@ def _handle_movie_start(
 
 @require_GET
 def spotify_web_playback_token(request: HttpRequest) -> JsonResponse:
+    _log_request_body_debug(request, endpoint="spotify_web_playback_token")
     now_timestamp = int(time.time())
     session_access_token = str(
         request.session.get("spotify_web_playback_access_token") or ""
@@ -952,6 +982,12 @@ def _request_spotify_oauth_token(*, grant_type: str, payload: dict[str, str]) ->
         )
 
     request_payload = {"grant_type": grant_type, **payload}
+    if _is_debug_logging_enabled():
+        logger.debug(
+            "Outgoing Spotify OAuth token request payload: grant_type=%s payload=%s",
+            grant_type,
+            request_payload,
+        )
     auth: tuple[str, str] | None = None
     if spotify_client_secret:
         auth = (spotify_client_id, spotify_client_secret)
@@ -965,6 +1001,12 @@ def _request_spotify_oauth_token(*, grant_type: str, payload: dict[str, str]) ->
                 auth=auth,
                 headers={"Accept": "application/json"},
             )
+            if _is_debug_logging_enabled():
+                logger.debug(
+                    "Spotify OAuth token response body: status=%s body=%s",
+                    response.status_code,
+                    response.text[:2000],
+                )
     except httpx.HTTPError as exc:
         logger.error("Spotify OAuth token request failed due to HTTP transport error: %s", exc)
         raise UpstreamServiceError("Spotify OAuth token endpoint is unreachable.") from exc
@@ -1018,6 +1060,7 @@ def _store_stream_session(browser_session_id: str, livepeer_stream_session: Stre
 @csrf_exempt
 @require_POST
 def stream_prompt(request: HttpRequest, session_id: str) -> JsonResponse:
+    _log_request_body_debug(request, endpoint="stream_prompt")
     stream = STREAM_SESSIONS.get(session_id)
     if stream is None or not stream.upstream_stream_id:
         logger.error(
@@ -1059,6 +1102,7 @@ def stream_prompt(request: HttpRequest, session_id: str) -> JsonResponse:
 @csrf_exempt
 @require_POST
 def stream_story_prompt(request: HttpRequest, session_id: str) -> JsonResponse:
+    _log_request_body_debug(request, endpoint="stream_story_prompt")
     stream = STREAM_SESSIONS.get(session_id)
     if stream is None or not stream.upstream_stream_id:
         logger.error(
