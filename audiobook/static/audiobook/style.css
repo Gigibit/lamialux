@@ -113,7 +113,10 @@ a { color: var(--accent); }
 }
 
 .request-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.stream-layout { grid-template-columns: minmax(0, 1fr); }
+.stream-layout {
+  width: 100%;
+  grid-template-columns: minmax(0, 1fr);
+}
 .stream-layout-music { grid-template-columns: minmax(0, 1.4fr) minmax(320px, 0.8fr); }
 label { display: grid; gap: 8px; }
 input,
@@ -155,6 +158,10 @@ button:disabled {
   gap: 12px;
   margin-top: 16px;
   flex-wrap: wrap;
+}
+
+.console-actions button {
+  width: auto;
 }
 
 
@@ -289,9 +296,7 @@ canvas {
   margin-top: 16px;
 }
 #whep-player {
-  width: min(96%, 1400px);
-  margin-left: auto;
-  margin-right: auto;
+  width: 100%;
 }
 .chunk-list ol,
 .track-facts {
