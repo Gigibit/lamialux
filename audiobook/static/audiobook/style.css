@@ -261,7 +261,7 @@ button:disabled {
   margin-top: 16px;
 }
 .canvas-shell-preload {
-  opacity: 0;
+  opacity: 1;
   pointer-events: none;
 }
 .canvas-shell canvas {
