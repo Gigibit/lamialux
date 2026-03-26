@@ -1332,35 +1332,17 @@
   );
 
   const getMovieTimelineSource = () => {
-    const preferredSources = [movieSourcePlayer, video];
-    for (const source of preferredSources) {
-      if (canSeekMediaElement(source)) {
-        return source;
-      }
+    if (canSeekMediaElement(movieSourcePlayer)) {
+      return movieSourcePlayer;
     }
-    for (const source of preferredSources) {
-      if (source && Number.isFinite(source.duration) && source.duration > 0) {
-        return source;
-      }
+    if (movieSourcePlayer && Number.isFinite(movieSourcePlayer.duration) && movieSourcePlayer.duration > 0) {
+      return movieSourcePlayer;
     }
-    return movieSourcePlayer || video || null;
+    return movieSourcePlayer || null;
   };
 
-  const syncMovieTimelinePeers = (targetTimeSeconds, sourceElement) => {
-    [movieSourcePlayer, video].forEach((element) => {
-      if (!element || element === sourceElement || !Number.isFinite(element.duration) || element.duration <= 0) {
-        return;
-      }
-      try {
-        element.currentTime = Math.max(0, Math.min(element.duration, targetTimeSeconds));
-      } catch (error) {
-        logger.error('Movie timeline sync failed for a secondary media element.', {
-          error,
-          elementId: element.id || 'unknown',
-          targetTimeSeconds,
-        });
-      }
-    });
+  const syncMovieTimelinePeers = () => {
+    // Intentionally no-op: timeline seeking must only act on #movie-source-player.
   };
 
   const renderMovieTimeline = () => {
