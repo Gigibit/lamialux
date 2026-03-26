@@ -879,7 +879,12 @@
       logger.error('Movie source player does not support captureStream().', { sourceVideoUrl });
       throw new Error('Movie captureStream is unavailable in this browser.');
     }
-    outboundStream = new MediaStream([...movieStream.getVideoTracks()]);
+    const movieVideoTracks = movieStream.getVideoTracks();
+    const movieAudioTracks = movieStream.getAudioTracks();
+    if (!movieAudioTracks.length) {
+      logger.error('Movie source captureStream() did not expose audio tracks for WHIP publishing.', { sourceVideoUrl });
+    }
+    outboundStream = new MediaStream([...movieVideoTracks, ...movieAudioTracks]);
     return outboundStream;
   };
 
@@ -1009,6 +1014,12 @@
       const [remoteStream] = event.streams;
       if (remoteStream) {
         video.srcObject = remoteStream;
+        if (page === 'movie') {
+          video.muted = false;
+          void video.play().catch((error) => {
+            logger.error('WHEP movie playback failed to start with remote audio.', { error });
+          });
+        }
       }
     });
     viewerPc.addEventListener('connectionstatechange', () => {
