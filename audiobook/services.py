@@ -100,6 +100,42 @@ def _http_response_debug_context(response: httpx.Response) -> dict[str, object]:
     }
 
 
+def _http_request_debug_context(
+    *, method: str, url: str, kwargs: dict[str, object]
+) -> dict[str, object]:
+    request_body = kwargs.get("json")
+    if request_body is None:
+        request_body = kwargs.get("data")
+    return {
+        "method": method.upper(),
+        "url": url,
+        "params": kwargs.get("params"),
+        "headers": kwargs.get("headers"),
+        "body": request_body,
+    }
+
+
+def _is_debug_logging_enabled() -> bool:
+    return logger.isEnabledFor(logging.DEBUG) or (
+        os.getenv("LOG_LEVEL", "").strip().upper() == "DEBUG"
+    )
+
+
+def _log_http_request_debug(*, method: str, url: str, kwargs: dict[str, object]) -> None:
+    if not _is_debug_logging_enabled():
+        return
+    logger.debug(
+        "Outgoing upstream request details: %s",
+        _http_request_debug_context(method=method, url=url, kwargs=kwargs),
+    )
+
+
+def _log_http_response_debug(response: httpx.Response) -> None:
+    if not _is_debug_logging_enabled():
+        return
+    logger.debug("Upstream response details: %s", _http_response_debug_context(response))
+
+
 class UpstreamServiceError(Exception):
     """Raised when an upstream provider returns an error."""
 
@@ -225,7 +261,14 @@ class OpenAiSearchNarrativeClient:
                     self.model,
                     self.base_url,
                 )
-                response = client.post(f"{self.base_url}/responses", headers=headers, json=payload)
+                request_kwargs: dict[str, object] = {"headers": headers, "json": payload}
+                _log_http_request_debug(
+                    method="POST",
+                    url=f"{self.base_url}/responses",
+                    kwargs=request_kwargs,
+                )
+                response = client.post(f"{self.base_url}/responses", **request_kwargs)
+                _log_http_response_debug(response)
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
                 logger.error(
@@ -313,7 +356,10 @@ class OpenAiSearchNarrativeClient:
         with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
             try:
                 logger.info("Downloading audiobook media from '%s'.", media_url)
-                response = client.get(media_url, headers={"User-Agent": "Mozilla/5.0 LamiaLux/1.0"})
+                request_kwargs = {"headers": {"User-Agent": "Mozilla/5.0 LamiaLux/1.0"}}
+                _log_http_request_debug(method="GET", url=media_url, kwargs=request_kwargs)
+                response = client.get(media_url, **request_kwargs)
+                _log_http_response_debug(response)
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
                 logger.error(
@@ -456,11 +502,13 @@ class WebResearchNarrativeClient:
                     search_query,
                     self.search_url,
                 )
-                response = client.get(
-                    self.search_url,
-                    params={"q": search_query},
-                    headers={"User-Agent": "Mozilla/5.0 LamiaLux/1.0"},
-                )
+                request_kwargs = {
+                    "params": {"q": search_query},
+                    "headers": {"User-Agent": "Mozilla/5.0 LamiaLux/1.0"},
+                }
+                _log_http_request_debug(method="GET", url=self.search_url, kwargs=request_kwargs)
+                response = client.get(self.search_url, **request_kwargs)
+                _log_http_response_debug(response)
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
                 logger.error(
@@ -537,7 +585,10 @@ class WebResearchNarrativeClient:
         with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
             try:
                 logger.info("Downloading PDF content from '%s'.", pdf_url)
-                response = client.get(pdf_url, headers={"User-Agent": "Mozilla/5.0 LamiaLux/1.0"})
+                request_kwargs = {"headers": {"User-Agent": "Mozilla/5.0 LamiaLux/1.0"}}
+                _log_http_request_debug(method="GET", url=pdf_url, kwargs=request_kwargs)
+                response = client.get(pdf_url, **request_kwargs)
+                _log_http_response_debug(response)
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
                 logger.error(
@@ -821,7 +872,9 @@ class MusicSearchClient:
     ) -> httpx.Response:
         attempt = 0
         while True:
+            _log_http_request_debug(method=method, url=url, kwargs=kwargs)
             response = client.request(method=method, url=url, **kwargs)
+            _log_http_response_debug(response)
             if response.status_code != 429:
                 response.raise_for_status()
                 return response
@@ -904,7 +957,14 @@ class YouTubeSearchNarrativeClient:
                     normalized_query,
                     self.max_results,
                 )
-                response = client.get(f"{self.base_url}/search", params=params)
+                request_kwargs = {"params": params}
+                _log_http_request_debug(
+                    method="GET",
+                    url=f"{self.base_url}/search",
+                    kwargs=request_kwargs,
+                )
+                response = client.get(f"{self.base_url}/search", **request_kwargs)
+                _log_http_response_debug(response)
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
                 logger.error(
@@ -1119,11 +1179,14 @@ class YouTubeStoryPromptClient:
                     self.story_prompt_model,
                     len(compact_source),
                 )
-                response = client.post(
-                    f"{self.openai_base_url}/responses",
-                    headers=headers,
-                    json=payload,
+                request_kwargs = {"headers": headers, "json": payload}
+                _log_http_request_debug(
+                    method="POST",
+                    url=f"{self.openai_base_url}/responses",
+                    kwargs=request_kwargs,
                 )
+                response = client.post(f"{self.openai_base_url}/responses", **request_kwargs)
+                _log_http_response_debug(response)
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
                 logger.error(
@@ -1233,11 +1296,14 @@ class DaydreamClient:
                     self.base_url,
                     payload.get("input_type"),
                 )
-                response = client.post(
-                    f"{self.base_url}{endpoint}",
-                    headers=self._headers(),
-                    json=payload,
+                request_kwargs = {"headers": self._headers(), "json": payload}
+                _log_http_request_debug(
+                    method="POST",
+                    url=f"{self.base_url}{endpoint}",
+                    kwargs=request_kwargs,
                 )
+                response = client.post(f"{self.base_url}{endpoint}", **request_kwargs)
+                _log_http_response_debug(response)
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
                 logger.error(
@@ -1353,11 +1419,11 @@ class PromptStreamUpdater:
                     upstream_stream_id,
                     len(normalized_prompt),
                 )
-                response = client.patch(
-                    f"{self.base_url}/v1/streams/{upstream_stream_id}",
-                    headers=headers,
-                    json=payload,
-                )
+                request_kwargs = {"headers": headers, "json": payload}
+                request_url = f"{self.base_url}/v1/streams/{upstream_stream_id}"
+                _log_http_request_debug(method="PATCH", url=request_url, kwargs=request_kwargs)
+                response = client.patch(request_url, **request_kwargs)
+                _log_http_response_debug(response)
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
                 logger.error(
