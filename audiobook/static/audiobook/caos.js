@@ -9,6 +9,7 @@ const canvas = document.getElementById('theia-canvas') || document.getElementsBy
 const logger = window.logger && typeof window.logger.error === 'function' ? window.logger : console;
 const DEFAULT_DESKTOP_WIDTH = 960;
 const DEFAULT_DESKTOP_HEIGHT = 540;
+let hasLoggedMissingCanvas = false;
 
 if (!canvas) {
     logger.error('Fluid simulation initialization skipped because no canvas element was found in the DOM.');
@@ -1146,6 +1147,14 @@ function calcDeltaTime() {
 }
 
 function resizeCanvas() {
+    if (!canvas) {
+        if (!hasLoggedMissingCanvas) {
+            logger.error('Canvas resize skipped because the canvas element is unavailable.');
+            hasLoggedMissingCanvas = true;
+        }
+        return false;
+    }
+
     // MODIFICA: Se il canvas è nascosto, interrompi la funzione.
     if (canvas.clientWidth === 0 || canvas.clientHeight === 0) {
         return false;
