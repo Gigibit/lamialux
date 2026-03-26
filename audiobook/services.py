@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import json
 import logging
@@ -20,6 +21,74 @@ from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api._errors import YouTubeTranscriptApiException
 
 logger = logging.getLogger("audiobook")
+
+DAYDREAM_DEFAULT_NEGATIVE_PROMPT = (
+    "low quality, blurry, noise, grain, distorted face, inconsistent features, "
+    "changing face, different outfit, flicker, frame inconsistency, temporal artifacts, "
+    "extra limbs, bad anatomy, deformed hands, mutation, identity shift, "
+    "different lighting per frame"
+)
+
+DAYDREAM_DEFAULT_PIPELINE_PARAMS: dict[str, object] = {
+    "seed": 42,
+    "delta": 0.55,
+    "width": 512,
+    "height": 512,
+    "prompt": "",
+    "model_id": "stabilityai/sdxl-turbo",
+    "lora_dict": None,
+    "ip_adapter": {
+        "type": "regular",
+        "scale": 1,
+        "enabled": False,
+    },
+    "controlnets": [
+        {
+            "enabled": True,
+            "model_id": "xinsir/controlnet-depth-sdxl-1.0",
+            "preprocessor": "depth_tensorrt",
+            "conditioning_scale": 0.46,
+            "preprocessor_params": {},
+        },
+        {
+            "enabled": True,
+            "model_id": "xinsir/controlnet-canny-sdxl-1.0",
+            "preprocessor": "canny",
+            "conditioning_scale": 0,
+            "preprocessor_params": {
+                "low_threshold": 100,
+                "high_threshold": 200,
+            },
+        },
+        {
+            "enabled": True,
+            "model_id": "xinsir/controlnet-tile-sdxl-1.0",
+            "preprocessor": "feedback",
+            "conditioning_scale": 0.2,
+            "preprocessor_params": {
+                "feedback_strength": 0.5,
+            },
+        },
+    ],
+    "acceleration": "tensorrt",
+    "do_add_noise": True,
+    "t_index_list": [15, 15, 15],
+    "use_lcm_lora": True,
+    "guidance_scale": 0.9,
+    "negative_prompt": DAYDREAM_DEFAULT_NEGATIVE_PROMPT,
+    "num_inference_steps": 50,
+    "use_denoising_batch": True,
+    "normalize_seed_weights": True,
+    "normalize_prompt_weights": True,
+    "seed_interpolation_method": "linear",
+    "ip_adapter_style_image_url": (
+        "https://storage.googleapis.com/thom-vod-testing/style-presets/default_preset.png"
+    ),
+    "enable_similar_image_filter": False,
+    "prompt_interpolation_method": "linear",
+    "similar_image_filter_threshold": 0.98,
+    "similar_image_filter_max_skip_frame": 10,
+}
 
 
 def _http_response_debug_context(response: httpx.Response) -> dict[str, object]:
@@ -1113,12 +1182,11 @@ class DaydreamClient:
         return headers
 
     def _start_payload(self, prompt: str) -> dict[str, object]:
+        params = copy.deepcopy(DAYDREAM_DEFAULT_PIPELINE_PARAMS)
+        params["prompt"] = prompt
         return {
             "pipeline": os.getenv("DAYDREAM_PIPELINE", "streamdiffusion"),
-            "params": {
-                "model_id": os.getenv("DAYDREAM_MODEL_ID", "stabilityai/sd-turbo"),
-                "prompt": prompt,
-            },
+            "params": params,
             "name": os.getenv("DAYDREAM_STREAM_NAME", "LamiaLux stream"),
             "input_type": os.getenv("DAYDREAM_INPUT_TYPE", "whip").strip().lower(),
         }
