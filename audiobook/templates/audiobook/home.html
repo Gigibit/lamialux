@@ -216,10 +216,26 @@
               <button type="button" id="play-media" {% if not music_track %}disabled{% endif %}>Play track</button>
             {% elif page == 'movie' %}
               <button type="button" id="play-media" {% if not stream %}disabled{% endif %}>Play movie</button>
+              <button type="button" id="movie-back" class="secondary" {% if not stream %}disabled{% endif %}>« Back 10s</button>
+              <button type="button" id="movie-forward" class="secondary" {% if not stream %}disabled{% endif %}>Forward 10s »</button>
             {% endif %}
             <button type="button" id="fullscreen-output" class="secondary">Fullscreen output</button>
             <button type="button" id="stop-media" class="secondary">Stop</button>
           </div>
+          {% if page == 'movie' %}
+            <div class="panel-subsection movie-prompt-controls">
+              <label for="movie-daydream-prompt-update">
+                <span class="small">Daydream prompt update</span>
+                <input
+                  id="movie-daydream-prompt-update"
+                  type="text"
+                  placeholder="Describe the next mood or visual transition"
+                  value="{{ stream.prompt|default:'' }}"
+                />
+              </label>
+              <button type="button" id="movie-daydream-prompt-submit" class="secondary" {% if not stream %}disabled{% endif %}>Update prompt</button>
+            </div>
+          {% endif %}
         </article>
 
         {% if page == 'music' %}
@@ -296,6 +312,7 @@
         updateStoryPromptDeltaSeconds: {{ update_story_prompt_delta_seconds|default:10 }},
         musicTrack: JSON.parse(document.getElementById('music-track-data').textContent),
         spotifyPlaybackTokenEndpoint: "{% url 'spotify-web-playback-token' %}",
+        initialPrompt: "{{ stream.prompt|default:''|escapejs }}",
       };
     </script>
     <script src="{% static 'audiobook/app.js' %}"></script>

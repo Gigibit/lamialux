@@ -5,6 +5,10 @@
   const playButton = document.getElementById('play-media');
   const stopButton = document.getElementById('stop-media');
   const fullscreenButton = document.getElementById('fullscreen-output');
+  const movieBackButton = document.getElementById('movie-back');
+  const movieForwardButton = document.getElementById('movie-forward');
+  const moviePromptInput = document.getElementById('movie-daydream-prompt-update');
+  const moviePromptSubmitButton = document.getElementById('movie-daydream-prompt-submit');
   const statusEl = document.getElementById('stream-status');
   const animationCanvas = document.getElementById('theia-canvas');
   const theiaFormSvg = document.getElementById('theia-form-deeper');
@@ -18,6 +22,7 @@
   const spotifyPlaybackTokenEndpoint = String(config.spotifyPlaybackTokenEndpoint || '/spotify/web-playback/token');
   const narrativeModeProvider = String(config.narrativeModeProvider || '').trim().toUpperCase();
   const sourceVideoUrl = String(config.sourceVideoUrl || '').trim();
+  const initialPrompt = String(config.initialPrompt || '').trim();
   const isSourceNarrationProvider = narrativeModeProvider === 'YOUTUBE_SEARCH';
   const PROMPT_UPDATE_INTERVAL_MS = 5000;
   const STORY_PROMPT_DELTA_SECONDS = Number(config.updateStoryPromptDeltaSeconds || 10);
@@ -736,7 +741,7 @@
 
   const pushPromptUpdate = async (prompt) => {
     if (!prompt || !streamSession.sessionId) {
-      return;
+      return false;
     }
     try {
       const response = await fetch(`/streams/${encodeURIComponent(streamSession.sessionId)}/prompt`, {
@@ -746,9 +751,12 @@
       });
       if (!response.ok) {
         logger.error('Prompt update returned a non-2xx response.', { sessionId: streamSession.sessionId, status: response.status });
+        return false;
       }
+      return true;
     } catch (error) {
       logger.error('Prompt update failed in the browser.', error);
+      return false;
     }
   };
 
@@ -1268,6 +1276,52 @@
     }
   };
 
+  const seekMovie = (deltaSeconds) => {
+    if (page !== 'movie') {
+      return;
+    }
+    if (!movieSourcePlayer) {
+      logger.error('Movie seek requested but the movie source player element is missing.', { deltaSeconds });
+      setStatus('Movie seek is unavailable because the source player is missing.');
+      return;
+    }
+    if (!Number.isFinite(movieSourcePlayer.duration) || movieSourcePlayer.duration <= 0) {
+      logger.error('Movie seek requested before media metadata was available.', {
+        deltaSeconds,
+        duration: movieSourcePlayer.duration,
+      });
+      setStatus('Movie metadata is not ready yet. Start playback first.');
+      return;
+    }
+    const targetTime = Math.max(0, Math.min(movieSourcePlayer.duration, movieSourcePlayer.currentTime + deltaSeconds));
+    movieSourcePlayer.currentTime = targetTime;
+    setStatus(`Moved movie to ${Math.round(targetTime)}s.`);
+  };
+
+  const submitMoviePromptUpdate = async () => {
+    if (page !== 'movie') {
+      return;
+    }
+    const prompt = String(moviePromptInput ? moviePromptInput.value : '').trim();
+    if (!prompt) {
+      logger.error('Movie daydream prompt update requested with empty text.');
+      setStatus('Write a prompt before sending a Daydream update.');
+      return;
+    }
+    try {
+      const updateSucceeded = await pushPromptUpdate(prompt);
+      if (!updateSucceeded) {
+        logger.error('Movie daydream prompt update returned a failed result.', { sessionId: streamSession.sessionId });
+        setStatus('Daydream prompt update failed.');
+        return;
+      }
+      setStatus('Daydream prompt updated for the movie stream.');
+    } catch (error) {
+      logger.error('Movie daydream prompt update failed.', { error });
+      setStatus('Daydream prompt update failed.');
+    }
+  };
+
   const stopEverything = async () => {
     cancelled = true;
     playbackToken += 1;
@@ -1295,7 +1349,14 @@
       theiaSvgTextureUrl = '';
     }
     setStatus('Stopped.');
-    setOverlay('LamiaLux ready', page === 'music' ? 'Search a track to start visual music playback.' : 'Search a PDF to start narration playback.');
+    setOverlay(
+      'LamiaLux ready',
+      page === 'music'
+        ? 'Search a track to start visual music playback.'
+        : (page === 'movie'
+          ? 'Upload an MP4 to start movie playback.'
+          : 'Search a PDF to start narration playback.'),
+    );
   };
 
   const enterFullscreen = async () => {
@@ -1357,6 +1418,28 @@
   stopButton.addEventListener('click', () => { void stopEverything(); });
   if (fullscreenButton) {
     fullscreenButton.addEventListener('click', () => { void enterFullscreen(); });
+  }
+  if (movieBackButton) {
+    movieBackButton.addEventListener('click', () => { seekMovie(-10); });
+  }
+  if (movieForwardButton) {
+    movieForwardButton.addEventListener('click', () => { seekMovie(10); });
+  }
+  if (moviePromptInput && !moviePromptInput.value && initialPrompt) {
+    moviePromptInput.value = initialPrompt;
+  }
+  if (moviePromptSubmitButton) {
+    moviePromptSubmitButton.addEventListener('click', () => {
+      void submitMoviePromptUpdate();
+    });
+  }
+  if (moviePromptInput) {
+    moviePromptInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        void submitMoviePromptUpdate();
+      }
+    });
   }
 
   prepareNarrativeSourceVideo();
