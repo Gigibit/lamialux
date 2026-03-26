@@ -157,6 +157,23 @@ button:disabled {
   flex-wrap: wrap;
 }
 
+
+.control-icon-button {
+  min-width: 48px;
+  min-height: 48px;
+  padding: 10px;
+  border-radius: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.control-icon-button span {
+  pointer-events: none;
+}
+
 .movie-controller {
   margin-top: 12px;
   display: grid;

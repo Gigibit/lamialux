@@ -213,14 +213,14 @@
           </div>
           <div class="console-actions">
             {% if page == 'music' %}
-              <button type="button" id="play-media" {% if not music_track %}disabled{% endif %}>Play track</button>
+              <button type="button" id="play-media" class="control-icon-button" aria-label="Play track" title="Play track" {% if not music_track %}disabled{% endif %}><span aria-hidden="true">▶</span></button>
             {% elif page == 'movie' %}
-              <button type="button" id="play-media" {% if not stream %}disabled{% endif %}>Play movie</button>
-              <button type="button" id="movie-back" class="secondary" {% if not stream %}disabled{% endif %}>« Back 10s</button>
-              <button type="button" id="movie-forward" class="secondary" {% if not stream %}disabled{% endif %}>Forward 10s »</button>
+              <button type="button" id="play-media" class="control-icon-button" aria-label="Play movie" title="Play movie" {% if not stream %}disabled{% endif %}><span aria-hidden="true">▶</span></button>
+              <button type="button" id="movie-back" class="secondary control-icon-button" aria-label="Rewind 10 seconds" title="Rewind 10 seconds" {% if not stream %}disabled{% endif %}><span aria-hidden="true">⏪</span></button>
+              <button type="button" id="movie-forward" class="secondary control-icon-button" aria-label="Forward 10 seconds" title="Forward 10 seconds" {% if not stream %}disabled{% endif %}><span aria-hidden="true">⏩</span></button>
             {% endif %}
-            <button type="button" id="fullscreen-output" class="secondary">Fullscreen output</button>
-            <button type="button" id="stop-media" class="secondary">Stop</button>
+            <button type="button" id="fullscreen-output" class="secondary control-icon-button" aria-label="Fullscreen output" title="Fullscreen output"><span aria-hidden="true">⛶</span></button>
+            <button type="button" id="stop-media" class="secondary control-icon-button" aria-label="Stop playback" title="Stop playback"><span aria-hidden="true">⏹</span></button>
           </div>
           {% if page == 'movie' %}
             <div class="movie-controller panel-subsection" id="movie-controller">
