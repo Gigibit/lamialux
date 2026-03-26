@@ -243,16 +243,14 @@
               </label>
             </div>
             <div class="panel-subsection movie-prompt-controls">
-              <label for="movie-daydream-prompt-update">
-                <span class="small">Daydream prompt update</span>
-                <input
-                  id="movie-daydream-prompt-update"
-                  type="text"
-                  placeholder="Describe the next mood or visual transition"
-                  value="{{ stream.prompt|default:'' }}"
-                />
-              </label>
-              <button type="button" id="movie-daydream-prompt-submit" class="secondary" {% if not stream %}disabled{% endif %}>Update prompt</button>
+              <span class="small">Daydream prompt update</span>
+              <input
+                id="movie-daydream-prompt-update"
+                type="text"
+                placeholder="Describe the next mood or visual transition"
+                value="{{ stream.prompt|default:'' }}"
+              />
+              <button type="button" id="movie-daydream-prompt-submit" {% if not stream %}disabled{% endif %}>Update prompt</button>
             </div>
           {% endif %}
         </article>

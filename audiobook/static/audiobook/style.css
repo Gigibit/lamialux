@@ -228,10 +228,16 @@ button:disabled {
 }
 .movie-prompt-controls {
   margin-top: 12px;
-  align-items: end;
+  display: grid;
+  gap: 10px;
+  align-items: stretch;
 }
-.movie-prompt-controls label {
-  flex: 1;
+.movie-prompt-controls input {
+  width: 100%;
+}
+.movie-prompt-controls button {
+  width: auto;
+  justify-self: start;
 }
 .visualizer-stack { margin-top: 16px; }
 .panel-subsection {
