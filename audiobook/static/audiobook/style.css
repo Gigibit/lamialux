@@ -156,6 +156,52 @@ button:disabled {
   margin-top: 16px;
   flex-wrap: wrap;
 }
+
+.movie-controller {
+  margin-top: 12px;
+  display: grid;
+  gap: 10px;
+  background: linear-gradient(120deg, rgba(37, 99, 235, 0.08), rgba(96, 165, 250, 0.18));
+  border-color: rgba(37, 99, 235, 0.22);
+}
+.movie-controller__header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+.movie-controller__header .eyebrow {
+  margin: 0;
+}
+.movie-controller__seek-label {
+  display: grid;
+  gap: 8px;
+}
+.movie-controller__seek {
+  appearance: none;
+  height: 8px;
+  border-radius: 999px;
+  padding: 0;
+  background: linear-gradient(90deg, #2563eb var(--seek-progress, 0%), rgba(37, 99, 235, 0.2) var(--seek-progress, 0%));
+  border: 1px solid rgba(37, 99, 235, 0.28);
+}
+.movie-controller__seek::-webkit-slider-thumb {
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 2px solid #2563eb;
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35);
+}
+.movie-controller__seek::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 2px solid #2563eb;
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35);
+}
 .movie-prompt-controls {
   margin-top: 12px;
   align-items: end;

@@ -223,6 +223,25 @@
             <button type="button" id="stop-media" class="secondary">Stop</button>
           </div>
           {% if page == 'movie' %}
+            <div class="movie-controller panel-subsection" id="movie-controller">
+              <div class="movie-controller__header">
+                <p class="eyebrow">Smart movie controls</p>
+                <p class="small" id="movie-timer">00:00 / 00:00</p>
+              </div>
+              <label for="movie-seek" class="movie-controller__seek-label">
+                <span class="small">Timeline cursor</span>
+                <input
+                  id="movie-seek"
+                  class="movie-controller__seek"
+                  type="range"
+                  min="0"
+                  max="1000"
+                  step="0.1"
+                  value="0"
+                  {% if not stream %}disabled{% endif %}
+                />
+              </label>
+            </div>
             <div class="panel-subsection movie-prompt-controls">
               <label for="movie-daydream-prompt-update">
                 <span class="small">Daydream prompt update</span>
