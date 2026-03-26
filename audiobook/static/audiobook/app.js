@@ -136,7 +136,7 @@
       return '';
     }
     try {
-      const parsed = new URL(url);
+      const parsed = new URL(url, window.location.origin);
       const host = parsed.hostname.toLowerCase();
       if (host.includes('youtu.be')) {
         return parsed.pathname.replace('/', '').trim();
