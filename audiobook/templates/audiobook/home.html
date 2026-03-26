@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>LamiaLux · {% if page == 'music' %}Visual Music{% else %}PDF Reader Stream{% endif %}</title>
+    <title>LamiaLux · {% if page == 'music' %}Visual Music{% elif page == 'movie' %}Movie Stream{% else %}PDF Reader Stream{% endif %}</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ctext y='50' font-size='50'%3E%F0%9F%8C%99%3C/text%3E%3C/svg%3E" />
     {% load static %}
     <link rel="stylesheet" href="{% static 'audiobook/style.css' %}" />
@@ -22,6 +22,9 @@
           <a href="/music" class="nav-icon-button {% if page == 'music' %}active{% endif %}" data-nav-target="music" aria-label="Music section">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 3v12.55A4 4 0 1 0 18 19V7h4V3h-6Z"/></svg>
           </a>
+          <a href="/movie" class="nav-icon-button {% if page == 'movie' %}active{% endif %}" data-nav-target="movie" aria-label="Movie section">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6Zm4 0v12h8V6H8Zm-3 4h2v2H5v-2Zm0 4h2v2H5v-2Zm12-4h2v2h-2v-2Zm0 4h2v2h-2v-2Z"/></svg>
+          </a>
         </div>
       </nav>
 
@@ -35,6 +38,15 @@
                 <p class="subtitle">
                   Search a music title on the configured <strong>MUSIC_MODE_PROVIDER</strong>, currently Spotify,
                   then play the track while the same browser session streams the reactive visual canvas into WHIP.
+                </p>
+              </div>
+            {% elif page == 'movie' %}
+              <div>
+                <p class="eyebrow">Movie upload · Livepeer WHIP/WHEP</p>
+                <h2>Movie relay</h2>
+                <p class="subtitle">
+                  Upload an MP4, generate the stream session prompt, and publish the uploaded movie stream directly via WHIP
+                  so the WHEP player receives the same movie feed without canvas/SVG compositing.
                 </p>
               </div>
             {% else %}
@@ -64,6 +76,20 @@
                 </label>
                 <button type="submit">Search track and prepare stream</button>
               </form>
+            {% elif page == 'movie' %}
+              <form method="post" class="request-form" data-mode="movie" enctype="multipart/form-data">
+                {% csrf_token %}
+                <input type="hidden" name="browser_session_id" id="browser-session-id" />
+                <label>
+                  <span>{{ movie_form.movie_file.label }}</span>
+                  {{ movie_form.movie_file }}
+                </label>
+                <label>
+                  <span>{{ movie_form.daydream_prompt.label }}</span>
+                  {{ movie_form.daydream_prompt }}
+                </label>
+                <button type="submit">Upload movie and prepare stream</button>
+              </form>
             {% else %}
               <form method="post" class="request-form" data-mode="book">
                 {% csrf_token %}
@@ -86,14 +112,15 @@
           <div class="section-heading">
             <div>
               <p class="eyebrow">Live output</p>
-              <h2>{% if stream %}{{ stream.title }}{% else %}{% if page == 'music' %}Visual music preview{% else %}Canvas preview{% endif %}{% endif %}</h2>
+              <h2>{% if stream %}{{ stream.title }}{% else %}{% if page == 'music' %}Visual music preview{% elif page == 'movie' %}Movie preview{% else %}Canvas preview{% endif %}{% endif %}</h2>
             </div>
-            <p class="small" id="stream-session-label">{% if stream %}Session not matched yet.{% else %}{% if page == 'music' %}Search a track to bind this canvas to a stream session.{% else %}Search a PDF to bind this canvas to a stream session.{% endif %}{% endif %}</p>
+            <p class="small" id="stream-session-label">{% if stream %}Session not matched yet.{% else %}{% if page == 'music' %}Search a track to bind this canvas to a stream session.{% elif page == 'movie' %}Upload an MP4 to bind this movie to a stream session.{% else %}Search a PDF to bind this canvas to a stream session.{% endif %}{% endif %}</p>
           </div>
-          <p class="small">{% if stream %}{{ stream.author }}{% else %}The visible canvas is always mounted so the animation surface is available before streaming starts.{% endif %}</p>
+          <p class="small">{% if stream %}{{ stream.author }}{% else %}{% if page == 'movie' %}The uploaded MP4 source will be streamed directly through WHIP once ready.{% else %}The visible canvas is always mounted so the animation surface is available before streaming starts.{% endif %}{% endif %}</p>
           <video id="whep-player" autoplay playsinline muted></video>
           <audio id="coqui-player" preload="none" hidden></audio>
           <audio id="music-player" preload="none" {% if page != 'music' %}hidden{% endif %}></audio>
+          <video id="movie-source-player" preload="metadata" muted playsinline {% if page != 'movie' %}hidden{% endif %}></video>
           <div class="visualizer-stack">
             {% if page == 'music' %}
               <div class="music-meta panel-subsection {% if not music_track %}empty-state{% endif %}" id="music-meta">
@@ -111,6 +138,7 @@
                 {% endif %}
               </div>
             {% endif %}
+            {% if page != 'movie' %}
             <div class="canvas-shell-preload" aria-hidden="true">
               <p class="eyebrow">Caos canvas</p>
               <div class="canvas-shell">
@@ -177,10 +205,17 @@
                 </div>
               </div>
             </div>
+            {% else %}
+            <div class="panel-subsection">
+              <p class="small">The uploaded MP4 stream is used directly as the WHIP source and mirrored in WHEP output.</p>
+            </div>
+            {% endif %}
           </div>
           <div class="console-actions">
             {% if page == 'music' %}
               <button type="button" id="play-media" {% if not music_track %}disabled{% endif %}>Play track</button>
+            {% elif page == 'movie' %}
+              <button type="button" id="play-media" {% if not stream %}disabled{% endif %}>Play movie</button>
             {% endif %}
             <button type="button" id="fullscreen-output" class="secondary">Fullscreen output</button>
             <button type="button" id="stop-media" class="secondary">Stop</button>

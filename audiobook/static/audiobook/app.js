@@ -11,6 +11,7 @@
   const video = document.getElementById('whep-player');
   const coquiPlayer = document.getElementById('coqui-player');
   const musicPlayer = document.getElementById('music-player');
+  const movieSourcePlayer = document.getElementById('movie-source-player');
   const sessionLabel = document.getElementById('stream-session-label');
   const items = Array.from(document.querySelectorAll('.chunk-list li'));
   const musicTrack = config.musicTrack || null;
@@ -22,7 +23,7 @@
   const STORY_PROMPT_DELTA_SECONDS = Number(config.updateStoryPromptDeltaSeconds || 10);
   const logger = window.logger && typeof window.logger.error === 'function' ? window.logger : console;
 
-  if (!stopButton || !animationCanvas || !video || !sessionLabel) {
+  if (!stopButton || !video || !sessionLabel) {
     return;
   }
 
@@ -43,7 +44,7 @@
   let publisherPc = null;
   let viewerPc = null;
   let whepResourceUrl = null;
-  let compositeStream = null;
+  let outboundStream = null;
   let connectPromise = null;
   let streamReady = false;
   let promptUpdateTimerId = null;
@@ -825,6 +826,10 @@
   };
 
   const prepareCompositeStream = async () => {
+    if (!animationCanvas) {
+      logger.error('Canvas stream requested but the Theia canvas element is missing.');
+      throw new Error('Canvas source is unavailable.');
+    }
     setOverlay('LamiaLux live canvas', page === 'music' ? 'Visual music canvas ready for WHIP publishing.' : 'Theia canvas capture ready for WHIP publishing.');
     if (!compositeCanvas) {
       compositeCanvas = document.createElement('canvas');
@@ -849,8 +854,40 @@
       theiaSvgRefreshTimerId = window.setInterval(refreshTheiaSvgTexture, 120);
     }
     const canvasStream = compositeCanvas.captureStream(30);
-    compositeStream = new MediaStream([...canvasStream.getVideoTracks()]);
-    return compositeStream;
+    outboundStream = new MediaStream([...canvasStream.getVideoTracks()]);
+    return outboundStream;
+  };
+
+  const prepareMovieSourceStream = async () => {
+    if (!movieSourcePlayer) {
+      logger.error('Movie stream requested but the movie source player element is missing.');
+      throw new Error('Movie source player is unavailable.');
+    }
+    if (!sourceVideoUrl) {
+      logger.error('Movie stream requested without a prepared sourceVideoUrl.', { sourceVideoUrl });
+      throw new Error('Movie source URL is missing.');
+    }
+    movieSourcePlayer.src = sourceVideoUrl;
+    movieSourcePlayer.loop = true;
+    movieSourcePlayer.muted = true;
+    await movieSourcePlayer.play().catch((error) => {
+      logger.error('Movie source player preload failed before WHIP publish.', { error, sourceVideoUrl });
+      throw error;
+    });
+    const movieStream = movieSourcePlayer.captureStream ? movieSourcePlayer.captureStream() : null;
+    if (!movieStream) {
+      logger.error('Movie source player does not support captureStream().', { sourceVideoUrl });
+      throw new Error('Movie captureStream is unavailable in this browser.');
+    }
+    outboundStream = new MediaStream([...movieStream.getVideoTracks()]);
+    return outboundStream;
+  };
+
+  const prepareOutgoingStream = async () => {
+    if (page === 'movie') {
+      return prepareMovieSourceStream();
+    }
+    return prepareCompositeStream();
   };
 
   const prepareNarrativeSourceVideo = () => {
@@ -905,7 +942,7 @@
       logPeerConnectionState('WHIP publisher ICE', publisherPc, { sessionId: streamSession.sessionId });
     });
 
-    const stream = compositeStream || await prepareCompositeStream();
+    const stream = outboundStream || await prepareOutgoingStream();
     stream.getTracks().forEach((track) => publisherPc.addTrack(track, stream));
     const offer = await publisherPc.createOffer();
     await publisherPc.setLocalDescription(offer);
@@ -1053,7 +1090,7 @@
         setStatus('Connecting WHIP/WHEP...');
         await refreshStreamSessionAfterWhip();
         validateStreamSession();
-        await prepareCompositeStream();
+        await prepareOutgoingStream();
         await publishWhip();
         setStatus('Canvas feed published through WHIP. Waiting for WHEP playback...');
         await connectWhep();
@@ -1198,6 +1235,28 @@
     }
   };
 
+  const playMovie = async () => {
+    if (!config.hasPreparedStream) {
+      setStatus('Upload an MP4 and prepare the stream before playback.');
+      return;
+    }
+    await ensureStreamingReady();
+    if (!movieSourcePlayer) {
+      logger.error('Movie playback requested but the movie source player element is missing.');
+      setStatus('Movie source player is unavailable.');
+      return;
+    }
+    connectLipAudioInput(movieSourcePlayer);
+    try {
+      await movieSourcePlayer.play();
+      setStatus('Playing uploaded movie and publishing through WHIP.');
+    } catch (error) {
+      logger.error('Uploaded movie playback failed to start.', { error, sourceVideoUrl });
+      setStatus('Uploaded movie playback failed to start.');
+      throw error;
+    }
+  };
+
   const stopEverything = async () => {
     cancelled = true;
     playbackToken += 1;
@@ -1207,6 +1266,7 @@
     highlightChunk(-1);
     await stopMediaElement(coquiPlayer);
     await stopMediaElement(musicPlayer);
+    await stopMediaElement(movieSourcePlayer);
     stopYouTubeSourceNarration();
     if (spotifyPlayer && typeof spotifyPlayer.pause === 'function') {
       await spotifyPlayer.pause().catch((error) => {
@@ -1273,6 +1333,8 @@
       try {
         if (page === 'music') {
           await playMusic();
+        } else if (page === 'movie') {
+          await playMovie();
         } else {
           await playBook();
         }
@@ -1287,6 +1349,6 @@
   }
 
   prepareNarrativeSourceVideo();
-  setOverlay('LamiaLux ready', page === 'music' ? 'Search a track to prepare the visual music canvas.' : 'Search, download, and read to start the book canvas.');
+  setOverlay('LamiaLux ready', page === 'music' ? 'Search a track to prepare the visual music canvas.' : (page === 'movie' ? 'Upload an MP4 to stream the movie directly over WHIP/WHEP.' : 'Search, download, and read to start the book canvas.'));
   maybeAutoReadBook();
 })();

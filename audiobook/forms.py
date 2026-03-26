@@ -32,3 +32,18 @@ class MusicRequestForm(forms.Form):
             }
         ),
     )
+
+
+class MovieRequestForm(forms.Form):
+    movie_file = forms.FileField(
+        label="Movie (.mp4)",
+    )
+    daydream_prompt = forms.CharField(
+        max_length=500,
+        label="Prompt",
+        widget=forms.TextInput(
+            attrs={
+                "placeholder": "cinematic dreamscape with soft volumetric light",
+            }
+        ),
+    )

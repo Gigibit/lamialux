@@ -3,6 +3,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import httpx
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase
 
 from audiobook.services import (
@@ -45,20 +46,36 @@ class HomeViewTests(TestCase):
         self.assertContains(response, 'id="music-player" preload="none"')
         self.assertContains(response, 'id="theia-canvas"')
         self.assertNotContains(response, 'id="narration-canvas"')
-        self.assertContains(response, "Canvas preview")
+        self.assertContains(response, "Visual music preview")
         self.assertContains(response, 'id="fullscreen-output"')
         self.assertContains(response, 'id="coqui-player"')
-        self.assertContains(response, 'id="narrative-source-video"')
+        self.assertContains(
+            response,
+            'id="movie-source-player" preload="metadata" muted playsinline hidden',
+        )
         self.assertNotContains(response, "Open downloaded PDF source")
 
+    def test_movie_page_renders(self) -> None:
+        response = self.client.get("/movie")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'data-page="movie"')
+        self.assertContains(response, 'Movie upload · Livepeer WHIP/WHEP')
+        self.assertContains(response, 'Upload movie and prepare stream')
+        self.assertContains(
+            response,
+            'id="movie-source-player" preload="metadata" muted playsinline',
+        )
+        self.assertNotContains(response, 'id="theia-canvas"')
+
     @patch("audiobook.views.DaydreamClient.create_livepeer_stream_session")
-    @patch("audiobook.views.WebResearchNarrativeClient.build_experience")
+    @patch("audiobook.views.NarrativeClientFactory.create")
     def test_start_book_stream_success(
         self,
-        build_experience,
+        create_client,
         create_livepeer_stream_session,
     ) -> None:
-        build_experience.return_value = type(
+        create_client.return_value.build_experience.return_value = type(
             "Experience",
             (),
             {
@@ -92,11 +109,9 @@ class HomeViewTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "PDF found, downloaded, chunked")
-        self.assertContains(response, "Narrative source found, media prepared")
         self.assertContains(response, "Session not matched yet.")
         self.assertNotContains(response, "Open downloaded PDF source")
-        self.assertContains(response, "Fear is the mind killer")
+        self.assertContains(response, "Dune · Chapter 1")
         self.assertContains(response, 'data-page="book"')
         self.assertContains(response, "window.lamialuxPageConfig")
         self.assertContains(response, "Search, download, and read")
@@ -148,8 +163,8 @@ class HomeViewTests(TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'id="narrative-source-video"')
-        self.assertNotContains(response, 'src="https://www.youtube.com/watch?v=DfK0b66vq8E"')
+        self.assertContains(response, "sourceVideoUrl:")
+        self.assertContains(response, "DfK0b66vq8E")
 
     @patch("audiobook.views.MusicSearchClient.search_track")
     @patch("audiobook.views.DaydreamClient.create_livepeer_stream_session")
@@ -186,11 +201,39 @@ class HomeViewTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Spotify track found and the visual music stream is ready")
+        self.assertContains(response, "Connect WHIP/WHEP to publish the canvas")
         self.assertContains(response, "Teardrop")
         self.assertContains(response, "Massive Attack")
         self.assertContains(response, 'data-page="music"')
         self.assertEqual(STREAM_SESSIONS["browser-music"].whip_url, "https://video.example/whip")
+
+    @patch("audiobook.views.DaydreamClient.create_livepeer_stream_session")
+    def test_start_movie_stream_success(self, create_livepeer_stream_session) -> None:
+        create_livepeer_stream_session.return_value = StreamSession(
+            session_id="livepeer-movie",
+            whip_url="https://video.example/whip",
+            whep_url="https://video.example/whep",
+            output_video_url="https://video.example/whep",
+            upstream_stream_id="livepeer-movie",
+        )
+
+        response = self.client.post(
+            "/movie",
+            {
+                "daydream_prompt": "cinematic dreamy lighting",
+                "browser_session_id": "browser-movie",
+                "movie_file": SimpleUploadedFile(
+                    "clip.mp4",
+                    b"\x00\x00\x00\x18ftypmp42",
+                    content_type="video/mp4",
+                ),
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Uploaded movie")
+        self.assertContains(response, 'data-page="movie"')
+        self.assertEqual(STREAM_SESSIONS["browser-movie"].whip_url, "https://video.example/whip")
 
     @patch(
         "audiobook.views.MusicSearchClient.search_track",
@@ -210,7 +253,15 @@ class HomeViewTests(TestCase):
         self.assertContains(response, "spotify boom", status_code=502)
 
 
-    @patch.dict("os.environ", {"SPOTIFY_WEB_PLAYBACK_ACCESS_TOKEN": "token-123"})
+    @patch.dict(
+        "os.environ",
+        {
+            "SPOTIFY_WEB_PLAYBACK_ACCESS_TOKEN": "token-123",
+            "SPOTIFY_WEB_PLAYBACK_ACCESS_TOKEN_SCOPES": (
+                "streaming user-read-email user-read-private user-modify-playback-state"
+            ),
+        },
+    )
     def test_spotify_web_playback_token_endpoint_success(self) -> None:
         response = self.client.get("/spotify/web-playback/token")
 

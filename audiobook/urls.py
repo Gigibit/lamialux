@@ -3,6 +3,8 @@ from django.urls import path
 from .views import (
     coqui_tts,
     home,
+    movie,
+    movie_source,
     music,
     spotify_web_playback_token,
     stream_match,
@@ -17,6 +19,8 @@ from .views import (
 urlpatterns = [
     path("", home, name="home"),
     path("music", music, name="music"),
+    path("movie", movie, name="movie"),
+    path("movie/source/<str:file_name>", movie_source, name="movie-source"),
     path(
         "spotify/web-playback/token",
         spotify_web_playback_token,
