@@ -1,0 +1,27 @@
+{
+  "version": "1.0",
+  "session": {
+    "new": true,
+    "sessionId": "SessionId.1234",
+    "application": {
+      "applicationId": "amzn1.ask.skill.1234"
+    },
+    "user": {
+      "userId": "amzn1.ask.account.1234"
+    }
+  },
+  "request": {
+    "type": "IntentRequest",
+    "requestId": "EdwRequestId.1234",
+    "intent": {
+      "name": "ChatIntent",
+      "slots": {
+        "message": {
+          "name": "message",
+          "value": "Ciao, come stai?"
+        }
+      }
+    }
+  }
+}
+

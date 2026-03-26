@@ -32,7 +32,14 @@ logger = logging.getLogger("audiobook")
 STREAM_SESSIONS: dict[str, StreamSession] = {}
 WHEP_PROXY_TIMEOUT = httpx.Timeout(connect=5.0, read=5.0, write=30.0, pool=5.0)
 BOOK_STREAM_PROMPT_TEMPLATE = (
-    "Mouth. Real Representation. {book_title}. REAL, NOT drawn, NOT blurry, "
+    "{book_title}. "
+    "(masterpiece, best quality, ultra detailed, cinematic storytelling), "
+    "marvel-inspired cinematic style, dramatic lighting, volumetric light, "
+    "consistent character design, same character across scenes, identity locked, "
+    "character sheet reference, fixed facial features, fixed costume, fixed proportions, "
+    "highly detailed face, recognizable identity, consistent hairstyle, same colors, "
+    "scene continuity, narrative progression, same person in different situations, "
+    "coherent environment transitions, cinematic framing, depth of field, "
     "NOT low quality, NOT flat, NOT 2d"
 )
 MOVIE_UPLOAD_DIR = Path(settings.BASE_DIR) / "runtime_uploads"

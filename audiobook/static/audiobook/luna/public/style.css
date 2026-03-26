@@ -1,0 +1,551 @@
+:root {
+    /* Palette Colori */
+    --background-color: #F4F4F9;
+    --container-bg: #FFFFFF;
+    --accent-color: #fffacd;
+    --text-color: #2D3748;
+    --border-color: #E2E8F0;
+
+    /* Tipografia e Stili */
+    --border-radius: 12px;
+    --font-family-sans: 'Nunito', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+
+    /* Ombreggiature */
+    --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+    --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+    --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
+}
+
+body {
+    margin: 0;
+    background: #0b1220;
+    height: 100%;
+}
+
+#title {
+    font-size: clamp(2rem, 8vw, 3rem);
+    /* scala da 2rem a 3rem a seconda dello schermo */
+    margin-bottom: 1rem;
+    font-family: 'Fredoka One', sans-serif;
+    color: #fffacd;
+    text-align: center;
+    width: 100%;
+    display: block;
+    margin-bottom: 1rem;
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+}
+
+#theia-form {
+    /* Posizionamento al centro */
+    position: absolute;
+margin: 0 auto;
+left: 0;
+right: 0;
+top: 90px;
+bottom: 0;
+    /* Stili per la responsività */
+    width: auto;
+    height: 85vh;  /* L'altezza massima sarà l'85% dello schermo */
+    max-width: 100vw;       /* Non può essere più largo dello schermo */
+    transition: opacity 3s ease-in-out;
+    /* Aggiunto per evitare che il merge lo nasconda */
+    opacity: 0.9; 
+
+}
+#theia-canvas {
+    transition: opacity ease-in-out 1s;
+    opacity: 0.2;
+    height: 100%;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden; /* Evita barre di scorrimento indesiderate */
+}
+
+#luna {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    top: 0;
+    bottom: 0;
+    right: 0;
+    left: 0;
+}
+
+#interaction-buttons {
+    top: 15px;
+    right: 15px;
+    position: absolute;
+    width: 120px;
+    background-color: #fff;
+    border: 1px black solid;
+    border-radius: 45px;
+    z-index: 99999999;
+    display: flex;
+    padding: 2px;
+}
+
+#interaction-buttons button {
+    /* Dimensioni e aspetto */
+    width: 44px;
+    height: 44px;
+    padding: 8px;
+    /* Spazio interno per l'icona */
+    border-radius: 50%;
+    /* Lo rende rotondo */
+    background-color: rgba(99, 102, 241, 0.3);
+    /* Sfondo semi-trasparente per la visibilità */
+    border: none;
+    /* Rimuove il bordo di default */
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+    box-sizing: border-box;
+    /* Assicura che il padding non aumenti la dimensione */
+    margin: 10px 2px;
+}
+
+/* Stato iniziale: icona unbarred visibile, barred nascosta */
+.icon-unbarred {
+    display: block;
+}
+
+.icon-barred {
+    display: none;
+}
+
+/* Quando il body ha la classe 'user-barred', inverti la visibilità */
+body.luna-body-undisplayed .icon-unbarred {
+    display: none;
+}
+
+body.luna-body-undisplayed .icon-barred {
+    display: block;
+}
+
+.button-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+}
+
+.luna-body-btn {
+    width: 64px;
+    height: 64px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background-color: rgba(99, 102, 241, 0.3);
+    color: var(--accent-color);
+    /* Imposta il colore per lo stroke dell'SVG */
+    border: none;
+    border-radius: 9999px;
+    cursor: pointer;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+    transition: transform 0.2s, background-color 0.2s;
+    position: relative;
+}
+
+.luna-body-btn:hover {
+    background-color: rgba(99, 102, 241, 0.5);
+    transform: scale(1.05);
+}
+
+.luna-body-btn svg {
+    width: 100%;
+    height: 100%;
+    stroke: currentColor;
+    stroke-width: 2;
+    fill: none;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+#on-screen-logger {
+    color: #fff;
+}
+
+.icon-unmuted {
+    display: none;
+    /* L'audio parte muto, quindi questa è nascosta */
+}
+
+body.audio-unmuted .icon-muted {
+    display: none;
+    /* Nascondi l'icona "muto" quando l'audio è attivo */
+}
+
+body.audio-unmuted .icon-unmuted {
+    display: block;
+    /* Mostra l'icona "attivo" quando l'audio è attivo */
+}
+
+#interaction-buttons button:hover {
+    background-color: rgba(99, 102, 241, 0.5);
+    /* Sfondo più scuro al passaggio del mouse */
+}
+
+/* Stile per l'icona SVG dentro il bottone */
+#interaction-buttons button svg {
+    /* Usa 'stroke' per colorare le linee dell'icona, non 'fill' */
+    stroke: var(--accent-color);
+    width: 100%;
+    /* L'icona riempie lo spazio del bottone */
+    height: 100%;
+    position: initial;
+}
+
+.icon-exit-fullscreen {
+    display: none;
+}
+
+/* Quando il body ha la classe 'fullscreen-active'... */
+body.fullscreen-active .icon-enter-fullscreen {
+    /* ...nascondi l'icona "enter" */
+    display: none;
+}
+
+body.fullscreen-active .icon-exit-fullscreen {
+    /* ...e mostra l'icona "exit" */
+    display: block;
+}
+
+
+
+#theia-canvas {
+    opacity: 0;
+    position: absolute;
+    top: 0;
+    right: 0;
+    left: 0;
+    bottom: 0;
+}
+
+canvas {
+    position: fixed;
+    /* o absolute */
+    top: 0;
+    left: 0;
+    z-index: 99999;
+}
+
+.button {
+    background: #fffacd;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    border-radius: 10px;
+    font-family: 'Fredoka One', sans-serif;
+    font-size: clamp(1rem, 3vw, 1.2rem);
+    color: #000;
+    cursor: pointer;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
+    transition: transform 0.2s;
+    position: fixed;
+    width: clamp(120px, 20vw, 180px);
+    height: clamp(45px, 6vw, 60px);
+}
+
+.paypal-button {
+    top: 30px;
+    left: 30px;
+}
+
+.wake-up {
+    bottom: 30px;
+    right: 30px;
+    border-radius: 50%;
+    width: 70px;
+    height: 70px;
+    background: radial-gradient(circle at 30% 30%, #fff, #fffacd 40%, #f0e68c 70%, #d4c68a 100%);
+    box-shadow:
+        inset -5px -5px 15px rgba(0, 0, 0, 0.2),
+        /* ombra interna per la curvatura */
+        0 4px 10px rgba(255, 255, 255, 0.2);
+    /* leggero bagliore esterno */
+    position: fixed;
+    cursor: pointer;
+    transition: transform 0.2s, box-shadow 0.3s;
+    z-index: 99999999;
+}
+
+.wake-up:hover {
+    transform: scale(1.05);
+    box-shadow:
+        inset -5px -5px 15px rgba(0, 0, 0, 0.2),
+        0 6px 20px rgba(255, 255, 255, 0.4);
+    /* bagliore più evidente al passaggio del mouse */
+}
+
+/* Optional: piccolo effetto “crateri” */
+.wake-up::before,
+.wake-up::after {
+    content: "";
+    position: absolute;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.1);
+}
+
+.wake-up::before {
+    width: 20px;
+    height: 20px;
+    top: 25%;
+    left: 35%;
+}
+
+.wake-up::after {
+    width: 12px;
+    height: 12px;
+    bottom: 20%;
+    right: 30%;
+}
+
+@media (max-width: 500px) {
+    #title {
+        font-size: 2rem;
+    }
+
+    #paypal-button {
+        width: 140px;
+        height: 50px;
+        font-size: 1rem;
+    }
+}
+
+svg {
+    width: 100%;
+    position: absolute;
+    top: 15px;
+    bottom: 0;
+    right: 0;
+    left: 0;
+    opacity: 0;
+    animation: fadeIn 1.5s ease-in forwards;
+    height: 100%;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
+}
+
+.stroke {
+    stroke: #0b0b0b;
+    stroke-width: 3;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+}
+
+
+@keyframes subtlePulseWhite {
+
+    0%,
+    100% {
+        r: 1.5;
+    }
+
+    50% {
+        r: 1.7;
+    }
+}
+
+.pupil-white {
+    animation: subtlePulseWhite 3s infinite ease-in-out;
+}
+
+#donate-button {
+    cursor: pointer;
+}
+
+  body {
+      margin: 0;
+      background: #0b1220;
+      height: 100%;
+  }
+
+  #title {
+      font-size: clamp(2rem, 8vw, 3rem);
+      /* scala da 2rem a 3rem a seconda dello schermo */
+      margin-bottom: 1rem;
+      font-family: 'Fredoka One', sans-serif;
+      color: #fffacd;
+      text-align: center;
+      width: 100%;
+      display: block;
+      margin-bottom: 1rem;
+      position: absolute;
+      bottom: 30px;
+      left: 0;
+      right: 0;
+  }
+
+  .button {
+      background: #fffacd;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      border-radius: 10px;
+      font-family: 'Fredoka One', sans-serif;
+      font-size: clamp(1rem, 3vw, 1.2rem);
+      color: #000;
+      cursor: pointer;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
+      transition: transform 0.2s;
+      position: fixed;
+      width: clamp(120px, 20vw, 180px);
+      height: clamp(45px, 6vw, 60px);
+  }
+
+  .paypal-button {
+      top: 30px;
+      left: 30px;
+  }
+
+  .wake-up {
+      bottom: 30px;
+      right: 30px;
+      border-radius: 50%;
+      width: 70px;
+      height: 70px;
+      background: radial-gradient(circle at 30% 30%, #fff, #fffacd 40%, #f0e68c 70%, #d4c68a 100%);
+      box-shadow:
+          inset -5px -5px 15px rgba(0, 0, 0, 0.2),
+          /* ombra interna per la curvatura */
+          0 4px 10px rgba(255, 255, 255, 0.2);
+      /* leggero bagliore esterno */
+      position: fixed;
+      cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.3s;
+  }
+
+  .wake-up:hover {
+      transform: scale(1.05);
+      box-shadow:
+          inset -5px -5px 15px rgba(0, 0, 0, 0.2),
+          0 6px 20px rgba(255, 255, 255, 0.4);
+      /* bagliore più evidente al passaggio del mouse */
+  }
+
+  /* Optional: piccolo effetto “crateri” */
+  .wake-up::before,
+  .wake-up::after {
+      content: "";
+      position: absolute;
+      border-radius: 50%;
+      background: rgba(0, 0, 0, 0.1);
+  }
+
+  .wake-up::before {
+      width: 20px;
+      height: 20px;
+      top: 25%;
+      left: 35%;
+  }
+
+  .wake-up::after {
+      width: 12px;
+      height: 12px;
+      bottom: 20%;
+      right: 30%;
+  }
+
+  @media (max-width: 500px) {
+      #title {
+          font-size: 2rem;
+      }
+
+      #paypal-button {
+          width: 140px;
+          height: 50px;
+          font-size: 1rem;
+      }
+  }
+
+  svg {
+      width: 100%;
+      position: absolute;
+      top: 15px;
+      bottom: 0;
+      right: 0;
+      left: 0;
+      opacity: 0;
+      animation: fadeIn 1.5s ease-in forwards;
+      height: 100%;
+  }
+
+  @keyframes fadeIn {
+      from {
+          opacity: 0;
+      }
+
+      to {
+          opacity: 1;
+      }
+  }
+
+  .stroke {
+      stroke: #0b0b0b;
+      stroke-width: 3;
+      stroke-linejoin: round;
+      stroke-linecap: round;
+  }
+
+
+  @keyframes subtlePulseWhite {
+
+      0%,
+      100% {
+          r: 1.5;
+      }
+
+      50% {
+          r: 1.7;
+      }
+  }
+
+  .pupil-white {
+      animation: subtlePulseWhite 3s infinite ease-in-out;
+  }
+#donate-button{
+    cursor: pointer;
+}
+/* SOSTITUISCI la vecchia regola 'svg' con questa */
+#theia-form svg {
+    width: 300px;
+    height: 300px;
+    top: 90px;
+    margin: 0 auto;
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    opacity: 0;
+    margin: 0 auto;
+    animation: fadeIn 1.5s ease-in forwards;
+}
+
+#theia-form {
+    /* Posizionamento al centro */
+    margin: 0 auto;
+    display: block;
+    position: absolute;
+    width: 100%;
+}
+    transform: translate(-50%, -50%);
+
+    /* Stili per la responsività */
+    width: auto;
+    height: 85vh; /* L'altezza massima sarà l'85% dello schermo */
+    max-width: 100vw; /* Non può essere più largo dello schermo */
+    opacity: 0.9; 
+}
+  
