@@ -778,17 +778,36 @@
   const startPromptUpdates = () => {
     stopPromptUpdates();
     stopStoryPromptUpdates();
-    if (page !== 'book' || !sentencePool.length) {
+    if (page !== 'book') {
+      logger.log('Prompt updates skipped because current page is not "book".', { page });
+      return;
+    }
+    if (!streamSession.sessionId) {
+      logger.error('Prompt updates skipped because stream session id is missing.', { streamSession });
       return;
     }
     if (isSourceNarrationProvider && sourceVideoUrl) {
       const videoId = extractYouTubeVideoId(sourceVideoUrl);
       if (videoId) {
+        logger.log('Starting story prompt updates from YouTube source narration.', {
+          sessionId: streamSession.sessionId,
+          videoId,
+          promptUpdateIntervalMs: PROMPT_UPDATE_INTERVAL_MS,
+          storyPromptDeltaSeconds: STORY_PROMPT_DELTA_SECONDS,
+        });
         storyPromptTimerId = window.setInterval(() => {
           const currentSeconds = youtubePlayer && typeof youtubePlayer.getCurrentTime === 'function'
             ? Number(youtubePlayer.getCurrentTime() || 0)
             : 0;
           const fallbackText = chooseRandomPromptSentence();
+          logger.log('Sending story prompt update request.', {
+            sessionId: streamSession.sessionId,
+            videoId,
+            currentSeconds,
+            hasFallbackText: Boolean(fallbackText),
+            fallbackTextLength: fallbackText ? fallbackText.length : 0,
+            storyPromptDeltaSeconds: STORY_PROMPT_DELTA_SECONDS,
+          });
           void fetch(`/streams/${encodeURIComponent(streamSession.sessionId)}/story-prompt`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -802,21 +821,34 @@
               logger.error('Story prompt update returned a non-2xx response.', {
                 status: response.status,
                 sessionId: streamSession.sessionId,
+                videoId,
                 currentSeconds,
                 deltaSeconds: STORY_PROMPT_DELTA_SECONDS,
               });
             }
           }).catch((error) => {
             logger.error('Story prompt update failed in the browser.', {
-              error,
-              sessionId: streamSession.sessionId,
-              currentSeconds,
-              deltaSeconds: STORY_PROMPT_DELTA_SECONDS,
-            });
+                error,
+                sessionId: streamSession.sessionId,
+                videoId,
+                currentSeconds,
+                deltaSeconds: STORY_PROMPT_DELTA_SECONDS,
+              });
           });
         }, PROMPT_UPDATE_INTERVAL_MS);
         return;
       }
+      logger.error('Source narration mode is active but no YouTube video id could be extracted.', {
+        sourceVideoUrl,
+        sessionId: streamSession.sessionId,
+      });
+    }
+    if (!sentencePool.length) {
+      logger.error('Prompt updates skipped because sentence pool is empty in non-source narration mode.', {
+        page,
+        sessionId: streamSession.sessionId,
+      });
+      return;
     }
     promptUpdateTimerId = window.setInterval(() => {
       const prompt = chooseRandomPromptSentence();
