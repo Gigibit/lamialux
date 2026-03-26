@@ -264,7 +264,27 @@
         });
       };
     </script>
-    <script src="{% static 'audiobook/caos.js' %}"></script>
+    {% if page != 'movie' %}
+    <script>
+      (function lazyLoadCaos() {
+        const ensureLogger = window.logger && typeof window.logger.error === 'function'
+          ? window.logger
+          : console;
+        const mount = document.getElementById('theia-canvas');
+        if (!mount) {
+          ensureLogger.error('Caos script lazy load skipped because #theia-canvas is missing from the current view.');
+          return;
+        }
+        const script = document.createElement('script');
+        script.src = "{% static 'audiobook/caos.js' %}";
+        script.defer = true;
+        script.onerror = (error) => {
+          ensureLogger.error('Failed to load caos.js for the Theia canvas view.', { error });
+        };
+        document.body.appendChild(script);
+      }());
+    </script>
+    {% endif %}
     <script src="https://sdk.scdn.co/spotify-player.js"></script>
     {{ music_track|json_script:"music-track-data" }}
     <script>
