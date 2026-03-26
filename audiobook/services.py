@@ -1055,12 +1055,32 @@ class YouTubeStoryPromptClient:
         delta_seconds: float,
         fallback_text: str,
     ) -> tuple[str, str]:
+        logger.info(
+            (
+                "Building story prompt for video_id=%s current_seconds=%s "
+                "delta_seconds=%s fallback_chars=%s."
+            ),
+            video_id,
+            current_seconds,
+            delta_seconds,
+            len(fallback_text.strip()),
+        )
         transcript_text = self._extract_transcript_window(
             video_id=video_id,
             current_seconds=current_seconds,
             delta_seconds=delta_seconds,
         )
         source_text = transcript_text or fallback_text.strip()
+        logger.info(
+            (
+                "Story prompt source selected for video_id=%s transcript_chars=%s "
+                "fallback_chars=%s selected_source=%s."
+            ),
+            video_id,
+            len(transcript_text),
+            len(fallback_text.strip()),
+            "transcript" if transcript_text else "fallback",
+        )
         if not source_text:
             logger.error(
                 "Story prompt update failed because no source text was available. "
@@ -1113,7 +1133,27 @@ class YouTubeStoryPromptClient:
             if line_text:
                 snippets.append(line_text)
 
-        return " ".join(snippets).strip()
+        combined = " ".join(snippets).strip()
+        if not combined:
+            logger.error(
+                "YouTube transcript window extraction returned no snippets for video_id=%s "
+                "current_seconds=%s delta_seconds=%s min_seconds=%s max_seconds=%s.",
+                video_id,
+                current_seconds,
+                delta_seconds,
+                min_seconds,
+                max_seconds,
+            )
+        else:
+            logger.info(
+                "YouTube transcript window extraction succeeded for video_id=%s "
+                "current_seconds=%s delta_seconds=%s snippet_chars=%s.",
+                video_id,
+                current_seconds,
+                delta_seconds,
+                len(combined),
+            )
+        return combined
 
     def _infer_transcript_language(self, video_id: str) -> str:
         try:
@@ -1156,6 +1196,9 @@ class YouTubeStoryPromptClient:
     def _rewrite_prompt_with_openai(self, source_text: str) -> str:
         compact_source = source_text.strip()
         if not self.openai_api_key:
+            logger.info(
+                "OpenAI story prompt rewrite skipped because OPENAI_API_KEY is not configured."
+            )
             return compact_source[:700]
 
         payload = {

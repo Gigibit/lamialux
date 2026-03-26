@@ -1160,6 +1160,15 @@ def stream_story_prompt(request: HttpRequest, session_id: str) -> JsonResponse:
         logger.error("Story prompt update failed for session '%s': %s", session_id, exc)
         logger.error("Returning non-2xx response for story prompt upstream failure: status=502")
         return JsonResponse({"error": str(exc)}, status=502)
+    except Exception as exc:
+        logger.error(
+            "Unexpected story prompt update error for session '%s' video_id='%s': %s",
+            session_id,
+            video_id,
+            exc,
+        )
+        logger.error("Returning non-2xx response for unexpected story prompt failure: status=500")
+        return JsonResponse({"error": "Unexpected error while updating story prompt."}, status=500)
 
     return JsonResponse(
         {
