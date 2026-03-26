@@ -21,11 +21,13 @@
   const sessionLabel = document.getElementById('stream-session-label');
   const items = Array.from(document.querySelectorAll('.chunk-list li'));
   const musicTrack = config.musicTrack || null;
+  const narratorEnabled = Boolean(config.narratorEnabled);
   const spotifyPlaybackTokenEndpoint = String(config.spotifyPlaybackTokenEndpoint || '/spotify/web-playback/token');
   const narrativeModeProvider = String(config.narrativeModeProvider || '').trim().toUpperCase();
   const sourceVideoUrl = String(config.sourceVideoUrl || '').trim();
   const initialPrompt = String(config.initialPrompt || '').trim();
   const isSourceNarrationProvider = narrativeModeProvider === 'YOUTUBE_SEARCH';
+  const isNarratorSvgCompositeEnabled = narratorEnabled && page === 'book';
   const PROMPT_UPDATE_INTERVAL_MS = 5000;
   const STORY_PROMPT_DELTA_SECONDS = Number(config.updateStoryPromptDeltaSeconds || 10);
   const logger = window.logger && typeof window.logger.error === 'function' ? window.logger : console;
@@ -852,6 +854,11 @@
       throw new Error('Canvas source is unavailable.');
     }
     setOverlay('LamiaLux live canvas', page === 'music' ? 'Visual music canvas ready for WHIP publishing.' : 'Theia canvas capture ready for WHIP publishing.');
+    if (!isNarratorSvgCompositeEnabled) {
+      const canvasStream = animationCanvas.captureStream(30);
+      outboundStream = new MediaStream([...canvasStream.getVideoTracks()]);
+      return outboundStream;
+    }
     if (!compositeCanvas) {
       compositeCanvas = document.createElement('canvas');
       compositeCanvas.width = animationCanvas.width;
