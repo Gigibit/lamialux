@@ -84,6 +84,7 @@
   let spotifyDeviceId = "";
   let spotifyAuthorizationCode = new URLSearchParams(window.location.search).get('code') || '';
   let spotifyAuthorizationState = new URLSearchParams(window.location.search).get('state') || '';
+  let movieSourcePreparedUrl = '';
 
   const sentencePool = items
     .flatMap((item) => (item.dataset.text || '').match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [])
@@ -878,8 +879,12 @@
       logger.error('Movie stream requested without a prepared sourceVideoUrl.', { sourceVideoUrl });
       throw new Error('Movie source URL is missing.');
     }
-    movieSourcePlayer.src = sourceVideoUrl;
-    movieSourcePlayer.loop = true;
+    if (!movieSourcePlayer.src || movieSourcePreparedUrl !== sourceVideoUrl) {
+      movieSourcePlayer.src = sourceVideoUrl;
+      movieSourcePreparedUrl = sourceVideoUrl;
+      movieSourcePlayer.load();
+    }
+    movieSourcePlayer.loop = false;
     movieSourcePlayer.muted = true;
     await movieSourcePlayer.play().catch((error) => {
       logger.error('Movie source player preload failed before WHIP publish.', { error, sourceVideoUrl });
