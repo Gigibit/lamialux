@@ -9,12 +9,13 @@ from pathlib import Path
 from urllib.parse import urlencode, urlparse
 
 import httpx
+from django.conf import settings
 from django.http import FileResponse, HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import render
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
-from .forms import BookRequestForm, MusicRequestForm
+from .forms import BookRequestForm, MovieRequestForm, MusicRequestForm
 from .services import (
     CoquiTtsClient,
     DaydreamClient,
@@ -34,6 +35,7 @@ BOOK_STREAM_PROMPT_TEMPLATE = (
     "Mouth. Real Representation. {book_title}. REAL, NOT drawn, NOT blurry, "
     "NOT low quality, NOT flat, NOT 2d"
 )
+MOVIE_UPLOAD_DIR = Path(settings.BASE_DIR) / "runtime_uploads"
 SPOTIFY_ACCOUNTS_AUTHORIZE_URL = "https://accounts.spotify.com/authorize"
 SPOTIFY_ACCOUNTS_TOKEN_URL = "https://accounts.spotify.com/api/token"
 SPOTIFY_WEB_PLAYBACK_SCOPES = (
@@ -154,6 +156,7 @@ def _page_context(page: str) -> dict[str, object]:
         ),
         "book_form": BookRequestForm(),
         "music_form": MusicRequestForm(),
+        "movie_form": MovieRequestForm(),
         "message": "",
         "error": "",
         "stream": None,
@@ -167,6 +170,10 @@ def home(request: HttpRequest) -> HttpResponse:
 
 def music(request: HttpRequest) -> HttpResponse:
     return _render_page(request=request, page="music")
+
+
+def movie(request: HttpRequest) -> HttpResponse:
+    return _render_page(request=request, page="movie")
 
 
 def _render_page(request: HttpRequest, *, page: str) -> HttpResponse:
@@ -503,6 +510,8 @@ def _handle_start(
 ) -> tuple[dict[str, object], int]:
     if page == "music":
         return _handle_music_start(request, context)
+    if page == "movie":
+        return _handle_movie_start(request, context)
     return _handle_book_start(request, context)
 
 
@@ -610,6 +619,76 @@ def _handle_music_start(
     context["message"] = (
         "Spotify track found and the visual music stream is ready. "
         "Connect WHIP/WHEP to publish the canvas while the song playback drives the session."
+    )
+    return context, 200
+
+
+def _save_uploaded_movie(movie_file) -> tuple[str, str]:
+    filename = str(movie_file.name or "movie.mp4")
+    extension = Path(filename).suffix.lower()
+    content_type = str(getattr(movie_file, "content_type", "") or "").lower()
+    if extension != ".mp4":
+        logger.error("Movie upload rejected because file extension is not .mp4: %s", filename)
+        raise UpstreamServiceError("Only .mp4 files are supported for movie streaming.")
+    if content_type and content_type not in {"video/mp4", "application/mp4"}:
+        logger.error(
+            "Movie upload rejected because content_type is not video/mp4: "
+            "filename=%s content_type=%s",
+            filename,
+            content_type,
+        )
+        raise UpstreamServiceError("Uploaded file must have MIME type video/mp4.")
+
+    MOVIE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    saved_path = MOVIE_UPLOAD_DIR / f"{uuid.uuid4().hex}.mp4"
+    with saved_path.open("wb") as output_handle:
+        for chunk in movie_file.chunks():
+            output_handle.write(chunk)
+    return saved_path.name, filename
+
+
+def _handle_movie_start(
+    request: HttpRequest,
+    context: dict[str, object],
+) -> tuple[dict[str, object], int]:
+    form = MovieRequestForm(request.POST, request.FILES)
+    context["movie_form"] = form
+
+    if not form.is_valid():
+        logger.error("Invalid movie start form submission: %s", form.errors)
+        context["error"] = "Please upload an .mp4 file and provide a prompt."
+        logger.error("Returning non-2xx response for invalid movie start form: status=400")
+        return context, 400
+
+    browser_session_id = _normalize_browser_session_id(request)
+    prompt = form.cleaned_data["daydream_prompt"].strip()
+    movie_file = form.cleaned_data["movie_file"]
+
+    try:
+        stored_name, original_name = _save_uploaded_movie(movie_file)
+        livepeer_stream_session = DaydreamClient().create_livepeer_stream_session(prompt)
+    except UpstreamServiceError as exc:
+        logger.error("Failed to start movie stream: %s", exc)
+        context["error"] = str(exc)
+        logger.error("Returning non-2xx response for movie stream upstream failure: status=502")
+        return context, 502
+
+    _store_stream_session(browser_session_id, livepeer_stream_session)
+    movie_source_path = f"/movie/source/{stored_name}"
+    prepared_stream = {
+        "mode": "movie",
+        "title": original_name,
+        "author": "Uploaded movie",
+        "prompt": prompt,
+        "source_video_url": movie_source_path,
+        "storage_path": str(MOVIE_UPLOAD_DIR),
+        "chunks": [],
+    }
+    request.session["prepared_stream"] = prepared_stream
+    context["stream"] = prepared_stream
+    context["message"] = (
+        "Movie uploaded and stream prepared. "
+        "Press Play to publish the uploaded MP4 through WHIP and view it via WHEP."
     )
     return context, 200
 
@@ -1144,3 +1223,18 @@ def coqui_tts(request: HttpRequest) -> HttpResponse:
         return HttpResponse("Prepared audio file not found.", status=404)
 
     return FileResponse(open(result.audio_path, "rb"), content_type=result.mime_type)
+
+
+@require_GET
+def movie_source(request: HttpRequest, file_name: str) -> HttpResponse:
+    safe_name = Path(file_name).name
+    source_path = MOVIE_UPLOAD_DIR / safe_name
+    if source_path.suffix.lower() != ".mp4":
+        logger.error("Movie source requested with invalid extension: %s", file_name)
+        logger.error("Returning non-2xx response for invalid movie source extension: status=400")
+        return JsonResponse({"error": "Invalid movie source path."}, status=400)
+    if not source_path.exists():
+        logger.error("Movie source requested for missing file: %s", safe_name)
+        logger.error("Returning non-2xx response for missing movie source: status=404")
+        return JsonResponse({"error": "Movie source not found."}, status=404)
+    return FileResponse(source_path.open("rb"), content_type="video/mp4")
