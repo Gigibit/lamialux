@@ -904,6 +904,22 @@
     return outboundStream;
   };
 
+  const initializeMovieSourcePlayer = () => {
+    if (page !== 'movie' || !movieSourcePlayer) {
+      return;
+    }
+    if (!sourceVideoUrl) {
+      logger.error('Movie source player initialization skipped because sourceVideoUrl is missing.', { sourceVideoUrl });
+      return;
+    }
+    if (movieSourcePlayer.src && movieSourcePreparedUrl === sourceVideoUrl) {
+      return;
+    }
+    movieSourcePlayer.src = sourceVideoUrl;
+    movieSourcePreparedUrl = sourceVideoUrl;
+    movieSourcePlayer.load();
+  };
+
   const prepareOutgoingStream = async () => {
     if (page === 'movie') {
       return prepareMovieSourceStream();
@@ -1529,6 +1545,7 @@
     });
   }
 
+  initializeMovieSourcePlayer();
   prepareNarrativeSourceVideo();
   renderMovieTimeline();
   setOverlay('LamiaLux ready', page === 'music' ? 'Search a track to prepare the visual music canvas.' : (page === 'movie' ? 'Upload an MP4 to stream the movie directly over WHIP/WHEP.' : 'Search, download, and read to start the book canvas.'));
